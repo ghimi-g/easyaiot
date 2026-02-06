@@ -305,6 +305,10 @@ services:
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=Kafka:9092 # Kafka地址（使用Docker服务名，用于标准配置）
       - SPRING_KAFKA_IOT_PRODUCER_BOOTSTRAP_SERVERS=Kafka:9092 # Kafka生产者地址（使用Docker服务名，用于自定义iot配置）
       - SPRING_KAFKA_IOT_CONSUMER_BOOTSTRAP_SERVERS=Kafka:9092 # Kafka消费者地址（使用Docker服务名，用于自定义iot配置）
+      - MINIO_URL=http://MinIO:9000 # Minio地址（使用Docker服务名）
+      - MINIO_DOWNLOAD_URL=http://MinIO:9001 # Minio下载地址（使用Docker服务名）
+      - MINIO_ACCESS_KEY=minioadmin # Minio访问密钥
+      - MINIO_SECRET_KEY=basiclab@iot975248395 # Minio秘密密钥
       # SkyWalking配置（如需要，请取消注释并配置）
       # - JAVA_TOOL_OPTIONS=-javaagent:/data/skywalking/skywalking-agent/skywalking-agent.jar
       # - SW_AGENT_NAME=iot-sink
