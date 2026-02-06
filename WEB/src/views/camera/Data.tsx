@@ -83,7 +83,17 @@ export function getBasicColumns(): BasicColumn[] {
       width: 70,
     },
     {
-      width: 150,
+      title: 'AI推流地址',
+      dataIndex: 'ai_rtmp_stream',
+      width: 70,
+    },
+    {
+      title: 'AI HTTP地址',
+      dataIndex: 'ai_http_stream',
+      width: 70,
+    },
+    {
+      width: 180,
       title: '操作',
       dataIndex: 'action',
     },

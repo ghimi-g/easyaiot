@@ -62,6 +62,8 @@ export const registerDevice = (data: {
   enable_forward?: boolean;
   rtmp_stream?: string;
   http_stream?: string;
+  ai_rtmp_stream?: string;
+  ai_http_stream?: string;
 }) => {
   return commonApi('post', `${CAMERA_PREFIX}/register/device`, data);
 };
@@ -93,6 +95,8 @@ export const updateDevice = (device_id: string, data: {
   enable_forward?: boolean;
   rtmp_stream?: string;
   http_stream?: string;
+  ai_rtmp_stream?: string;
+  ai_http_stream?: string;
 }) => {
   return commonApi('put', `${CAMERA_PREFIX}/device/${device_id}`, data);
 };
@@ -211,6 +215,8 @@ export interface DeviceInfo {
   source: string;
   rtmp_stream: string;
   http_stream: string;
+  ai_rtmp_stream?: string;
+  ai_http_stream?: string;
   stream: number;
   ip: string;
   port: number;

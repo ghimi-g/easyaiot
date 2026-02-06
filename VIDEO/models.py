@@ -32,6 +32,8 @@ class Device(db.Model):
     source = db.Column(db.Text, nullable=False)
     rtmp_stream = db.Column(db.Text, nullable=False)
     http_stream = db.Column(db.Text, nullable=False)
+    ai_rtmp_stream = db.Column(db.Text, nullable=True, comment='AI推流地址（用于算法任务）')
+    ai_http_stream = db.Column(db.Text, nullable=True, comment='AI HTTP地址（用于算法任务）')
     stream = db.Column(db.SmallInteger, nullable=True)
     ip = db.Column(db.String(45), nullable=True)
     port = db.Column(db.SMALLINT, nullable=True)

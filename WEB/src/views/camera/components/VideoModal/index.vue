@@ -174,6 +174,16 @@
               </FormItem>
             </Col>
             <Col :span="12">
+              <FormItem label="AI推流地址" name="ai_rtmp_stream" v-bind=validateInfos.ai_rtmp_stream>
+                <Input v-model:value="modelRef.ai_rtmp_stream"/>
+              </FormItem>
+            </Col>
+            <Col :span="12">
+              <FormItem label="AI HTTP地址" name="ai_http_stream" v-bind=validateInfos.ai_http_stream>
+                <Input v-model:value="modelRef.ai_http_stream"/>
+              </FormItem>
+            </Col>
+            <Col :span="12">
               <FormItem label="IP地址" name="ip" v-bind=validateInfos.ip>
                 <Input v-model:value="modelRef.ip"/>
               </FormItem>
@@ -279,6 +289,8 @@ const modelRef = reactive({
   source: '',
   rtmp_stream: '',
   http_stream: '',
+  ai_rtmp_stream: '',
+  ai_http_stream: '',
   stream: 0,
   enable_forward: '',
   ip: '',

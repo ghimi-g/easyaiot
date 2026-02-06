@@ -41,7 +41,7 @@
             <template #bodyCell="{ column, record }">
               <!-- 统一复制功能组件 -->
               <template
-                v-if="['id', 'name', 'model', 'source', 'rtmp_stream', 'http_stream'].includes(column.key)">
+                v-if="['id', 'name', 'model', 'source', 'rtmp_stream', 'http_stream', 'ai_rtmp_stream', 'ai_http_stream'].includes(column.key)">
           <span style="cursor: pointer" @click="handleCopy(record[column.key])"><Icon
             icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record[column.key] }}</span>
               </template>
@@ -71,6 +71,7 @@
               @edit="handleCardEdit"
               @delete="handleCardDelete"
               @play="handleCardPlay"
+              @playAI="handleCardPlayAI"
               @toggleStream="handleCardToggleStream"
             >
               <template #header>
@@ -384,7 +385,37 @@ const getTableActions = (record) => {
       icon: 'octicon:play-16',
       tooltip: '播放RTMP流',
       onClick: () => handlePlay(record)
-    },
+    }
+  ];
+
+  // 如果有AI流地址，添加查看AI流按钮
+  if (record.ai_http_stream || record.ai_rtmp_stream) {
+    actions.push({
+      icon: 'hugeicons:ai-video',
+      tooltip: '查看AI流',
+      onClick: () => handlePlayAIStream(record)
+    });
+  }
+
+  // 根据流状态添加不同的操作按钮
+  const currentStatus = (deviceStreamStatuses.value && deviceStreamStatuses.value[record.id]) || 'unknown';
+
+  if (currentStatus === 'running') {
+    actions.splice(1, 0, {
+      icon: 'ant-design:pause-circle-outlined',
+      tooltip: '停止RTSP转发',
+      onClick: () => handleDisableRtsp(record)
+    });
+  } else {
+    actions.splice(1, 0, {
+      icon: 'ant-design:swap-outline',
+      tooltip: '启用RTSP转发',
+      onClick: () => handleEnableRtsp(record)
+    });
+  }
+
+  // 添加详情、编辑、删除按钮
+  actions.push(
     {
       icon: 'ant-design:eye-filled',
       tooltip: '详情',
@@ -403,24 +434,7 @@ const getTableActions = (record) => {
         confirm: () => handleDelete(record)
       }
     }
-  ];
-
-  // 根据流状态添加不同的操作按钮
-  const currentStatus = (deviceStreamStatuses.value && deviceStreamStatuses.value[record.id]) || 'unknown';
-
-  if (currentStatus === 'running') {
-    actions.splice(1, 0, {
-      icon: 'ant-design:pause-circle-outlined',
-      tooltip: '停止RTSP转发',
-      onClick: () => handleDisableRtsp(record)
-    });
-  } else {
-    actions.splice(1, 0, {
-      icon: 'ant-design:swap-outline',
-      tooltip: '启用RTSP转发',
-      onClick: () => handleEnableRtsp(record)
-    });
-  }
+  );
 
   return actions;
 };
@@ -504,6 +518,16 @@ function handlePlay(record) {
   openPlayerAddModel(true, record)
 }
 
+// 播放AI流
+function handlePlayAIStream(record) {
+  // 创建一个新的record对象，将ai_http_stream赋值给http_stream，以便播放器使用
+  const aiRecord = {
+    ...record,
+    http_stream: record.ai_http_stream || record.ai_rtmp_stream
+  };
+  openPlayerAddModel(true, aiRecord)
+}
+
 async function handleCopy(text: string) {
   if (navigator.clipboard) {
     await navigator.clipboard.writeText(text);
@@ -581,6 +605,10 @@ const handleCardDelete = async (record) => {
 
 const handleCardPlay = (record) => {
   handlePlay(record);
+};
+
+const handleCardPlayAI = (record) => {
+  handlePlayAIStream(record);
 };
 
 const handleCardToggleStream = async (record) => {

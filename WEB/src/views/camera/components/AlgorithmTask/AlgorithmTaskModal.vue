@@ -46,7 +46,7 @@ import {
   updateAlgorithmTask,
   type AlgorithmTask,
 } from '@/api/device/algorithm_task';
-import { getDeviceList, getDeviceConflicts } from '@/api/device/camera';
+import { getDeviceList } from '@/api/device/camera';
 import { getModelPage } from '@/api/device/model';
 import { notifyTemplateQueryByType } from '@/api/device/notice';
 import DefenseSchedulePicker from './DefenseSchedulePicker.vue';
@@ -130,23 +130,14 @@ const placeholders = [
 // 加载设备列表
 const loadDevices = async () => {
   try {
-    // 并行加载设备列表和冲突列表
-    const [deviceResponse, conflictResponse] = await Promise.all([
-      getDeviceList({ pageNo: 1, pageSize: 1000 }),
-      getDeviceConflicts('algorithm')
-    ]);
-
-    // 获取冲突的摄像头ID列表
-    const conflictDeviceIds = conflictResponse.code === 0 && conflictResponse.data
-      ? new Set(conflictResponse.data)
-      : new Set();
+    // 加载设备列表（推流转发任务和算法任务可以共存，不再检查冲突）
+    const deviceResponse = await getDeviceList({ pageNo: 1, pageSize: 1000 });
 
     deviceOptions.value = (deviceResponse.data || []).map((item) => {
-      const isDisabled = conflictDeviceIds.has(item.id);
       return {
-        label: `${item.name || item.id}${isDisabled ? ' (已在推流转发任务中使用)' : ''}`,
+        label: item.name || item.id,
         value: item.id,
-        disabled: isDisabled,
+        disabled: false,
       };
     });
 

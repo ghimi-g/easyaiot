@@ -107,7 +107,13 @@ DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://postgres:postgres@localho
 VIDEO_SERVICE_PORT = os.getenv('VIDEO_SERVICE_PORT', '6000')
 # 网关地址（用于构建完整的告警hook URL）
 GATEWAY_URL = os.getenv('GATEWAY_URL', 'http://localhost:48080')
-ALERT_HOOK_URL = f"http://localhost:{VIDEO_SERVICE_PORT}/video/alert/hook"
+# 告警hook URL：优先使用GATEWAY_URL，如果GATEWAY_URL包含端口则使用，否则使用VIDEO_SERVICE_PORT
+if GATEWAY_URL and GATEWAY_URL != 'http://localhost:48080':
+    # 使用网关地址构建hook URL
+    ALERT_HOOK_URL = f"{GATEWAY_URL}/video/alert/hook"
+else:
+    # 回退到使用VIDEO_SERVICE_PORT（本地开发环境）
+    ALERT_HOOK_URL = f"http://localhost:{VIDEO_SERVICE_PORT}/video/alert/hook"
 
 # 数据库会话
 engine = create_engine(DATABASE_URL)
@@ -460,21 +466,21 @@ def load_task_config():
             # 刷新设备关联关系，确保获取最新的设备信息
             db_session.refresh(task)
             for device in task.devices:
-                # 刷新设备对象，确保获取最新的source和rtmp_stream
+                # 刷新设备对象，确保获取最新的source和ai_rtmp_stream
                 db_session.refresh(device)
                 # 输入流地址（支持RTSP和RTMP格式，从device.source获取）
                 rtsp_url = device.source if device.source else None
-                # RTMP流地址作为输出（从device.rtmp_stream获取）
-                rtmp_url = device.rtmp_stream if device.rtmp_stream else None
+                # AI RTMP流地址作为输出（从device.ai_rtmp_stream获取，如果不存在则回退到device.rtmp_stream）
+                rtmp_url = device.ai_rtmp_stream if device.ai_rtmp_stream else (device.rtmp_stream if device.rtmp_stream else None)
                 device_streams[device.id] = {
                     'rtsp_url': rtsp_url,  # 输入流地址
-                    'rtmp_url': rtmp_url,  # 输出流地址
+                    'rtmp_url': rtmp_url,  # AI输出流地址
                     'device_name': device.name or device.id
                 }
                 input_type = "RTSP" if rtsp_url and rtsp_url.startswith(
                     'rtsp://') else "RTMP" if rtsp_url and rtsp_url.startswith('rtmp://') else "输入流"
                 logger.info(
-                    f"📹 设备 {device.id} ({device.name or device.id}): {input_type}={rtsp_url}, RTMP输出={rtmp_url}")
+                    f"📹 设备 {device.id} ({device.name or device.id}): {input_type}={rtsp_url}, AI RTMP输出={rtmp_url}")
 
         # 将设备流地址信息存储到task_config中（通过动态属性）
         task_config.device_streams = device_streams
@@ -517,7 +523,10 @@ def send_alert_event_async(alert_data: Dict):
     def _send():
         try:
             if not task_config or not task_config.alert_event_enabled:
+                logger.warning(f"⚠️ 告警事件发送被跳过：task_config={task_config is not None}, alert_event_enabled={task_config.alert_event_enabled if task_config else None}, device_id={alert_data.get('device_id')}")
                 return
+            
+            logger.info(f"📤 开始发送告警事件: device_id={alert_data.get('device_id')}, object={alert_data.get('object')}, URL={ALERT_HOOK_URL}")
 
             # 通过 HTTP 发送告警事件到 sink hook 接口
             # sink 会负责将告警投入 Kafka
@@ -531,12 +540,12 @@ def send_alert_event_async(alert_data: Dict):
                     headers={'Content-Type': 'application/json'}
                 )
                 if response.status_code == 200:
-                    logger.debug(f"告警事件已发送到 sink hook: device_id={alert_data.get('device_id')}")
+                    logger.info(f"✅ 告警事件已成功发送到 sink hook: device_id={alert_data.get('device_id')}, object={alert_data.get('object')}, event={alert_data.get('event')}")
                 else:
                     logger.warning(
-                        f"发送告警事件到 sink hook 失败: status_code={response.status_code}, response={response.text}")
+                        f"❌ 发送告警事件到 sink hook 失败: status_code={response.status_code}, response={response.text}, device_id={alert_data.get('device_id')}")
             except requests.exceptions.RequestException as e:
-                logger.warning(f"发送告警事件到 sink hook 异常: {str(e)}")
+                logger.warning(f"❌ 发送告警事件到 sink hook 异常: {str(e)}, URL={ALERT_HOOK_URL}, device_id={alert_data.get('device_id')}")
         except Exception as e:
             logger.error(f"发送告警事件失败: {str(e)}", exc_info=True)
 
@@ -2010,6 +2019,7 @@ def buffer_streamer_worker(device_id: str):
                 # 如果帧已处理，检查是否有新的检测结果需要发送告警
                 if is_processed:
                     detections = frame_data.get('detections', [])
+                    should_send_alert = False  # 初始化为False
                     if detections and task_config and task_config.alert_event_enabled:
                         # 告警抑制：使用锁保护时间戳的访问和更新，确保线程安全
                         current_time = time.time()
@@ -2022,54 +2032,77 @@ def buffer_streamer_worker(device_id: str):
                                 # 立即更新上次告警时间（在发送告警之前），防止同一秒内多次推送
                                 last_alert_time[device_id] = current_time
                                 should_send_alert = True
+                                logger.info(
+                                    f"🔔 设备 {device_id} 准备发送告警：检测到 {len(detections)} 个目标，距离上次告警 {time_since_last_alert:.2f} 秒")
                             else:
                                 # 不到5秒，跳过告警推送
                                 should_send_alert = False
-                                logger.debug(
-                                    f"设备 {device_id} 告警抑制：距离上次推送仅 {time_since_last_alert:.2f} 秒，跳过告警推送（需要间隔5秒）")
+                                logger.info(
+                                    f"⏸️  设备 {device_id} 告警抑制：距离上次推送仅 {time_since_last_alert:.2f} 秒，跳过告警推送（需要间隔5秒），检测到 {len(detections)} 个目标")
+                    elif detections and (not task_config or not task_config.alert_event_enabled):
+                        # 有检测结果但告警未启用
+                        if next_output_frame % 100 == 0:  # 每100帧记录一次，避免日志过多
+                            logger.debug(
+                                f"设备 {device_id} 检测到 {len(detections)} 个目标，但告警事件未启用（alert_event_enabled={task_config.alert_event_enabled if task_config else None}）")
 
-                        # 在锁外发送告警，避免长时间持有锁
-                        if should_send_alert:
-                            # 发送告警（每个检测结果发送一次）
+                    # 在锁外发送告警，避免长时间持有锁
+                    if should_send_alert:
+                        # 只发送一次告警，包含所有检测到的目标信息
+                        try:
+                            # 统计检测到的目标类型和数量
+                            object_counts = {}
+                            all_detections_info = []
                             for det in detections:
-                                try:
-                                    # 保存告警图片到本地
-                                    image_path = save_alert_image(
-                                        output_frame,
-                                        device_id,
-                                        next_output_frame,
-                                        det
-                                    )
+                                class_name = det.get('class_name', 'unknown')
+                                object_counts[class_name] = object_counts.get(class_name, 0) + 1
+                                all_detections_info.append({
+                                    'track_id': det.get('track_id', 0),
+                                    'class_name': class_name,
+                                    'confidence': det.get('confidence', 0),
+                                    'bbox': det.get('bbox', []),
+                                    'first_seen_time': datetime.fromtimestamp(
+                                        det.get('first_seen_time', current_timestamp)).isoformat() if det.get(
+                                        'first_seen_time') else None,
+                                    'duration': det.get('duration', 0)
+                                })
+                            
+                            # 选择数量最多的目标类型作为主要对象（如果有多个类型，选择第一个）
+                            primary_object = max(object_counts.items(), key=lambda x: x[1])[0] if object_counts else 'unknown'
+                            
+                            # 保存告警图片到本地（使用第一个检测结果作为代表）
+                            image_path = save_alert_image(
+                                output_frame,
+                                device_id,
+                                next_output_frame,
+                                detections[0] if detections else {}
+                            )
 
-                                    # 构建告警数据（参照告警表字段）
-                                    # 获取算法名称（任务名称）
-                                    algorithm_name = task_config.task_name if task_config and hasattr(task_config,
-                                                                                                      'task_name') else 'detection'
+                            # 构建告警数据（参照告警表字段）
+                            # 获取算法名称（任务名称）
+                            algorithm_name = task_config.task_name if task_config and hasattr(task_config,
+                                                                                                  'task_name') else 'detection'
 
-                                    alert_data = {
-                                        'object': det.get('class_name', 'unknown'),
-                                        'event': algorithm_name,  # 使用算法名称作为事件类型
-                                        'device_id': device_id,
-                                        'device_name': device_name,
-                                        'time': datetime.fromtimestamp(current_timestamp).strftime('%Y-%m-%d %H:%M:%S'),
-                                        'information': json.dumps({
-                                            'track_id': det.get('track_id', 0),
-                                            'confidence': det.get('confidence', 0),
-                                            'bbox': det.get('bbox', []),
-                                            'frame_number': next_output_frame,
-                                            'first_seen_time': datetime.fromtimestamp(
-                                                det.get('first_seen_time', current_timestamp)).isoformat() if det.get(
-                                                'first_seen_time') else None,
-                                            'duration': det.get('duration', 0)
-                                        }),
-                                        # 不直接传输图片，而是传输图片所在磁盘路径
-                                        'image_path': image_path if image_path else None,
-                                    }
+                            alert_data = {
+                                'object': primary_object,  # 主要对象类型
+                                'event': algorithm_name,  # 使用算法名称作为事件类型
+                                'device_id': device_id,
+                                'device_name': device_name,
+                                'time': datetime.fromtimestamp(current_timestamp).strftime('%Y-%m-%d %H:%M:%S'),
+                                'information': json.dumps({
+                                    'total_count': len(detections),  # 总目标数量
+                                    'object_counts': object_counts,  # 各类型目标数量统计
+                                    'detections': all_detections_info,  # 所有检测目标的详细信息
+                                    'frame_number': next_output_frame,
+                                }),
+                                # 不直接传输图片，而是传输图片所在磁盘路径
+                                'image_path': image_path if image_path else None,
+                            }
 
-                                    # 异步发送告警事件
-                                    send_alert_event_async(alert_data)
-                                except Exception as e:
-                                    logger.error(f"发送告警失败: {str(e)}", exc_info=True)
+                            # 异步发送告警事件（只发送一次）
+                            send_alert_event_async(alert_data)
+                            logger.info(f"📨 已发送告警事件：检测到 {len(detections)} 个目标（{object_counts}）")
+                        except Exception as e:
+                            logger.error(f"发送告警失败: {str(e)}", exc_info=True)
 
                 # 推送到RTMP流
                 if pusher_process and pusher_process.poll() is None and rtmp_url:

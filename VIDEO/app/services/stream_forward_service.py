@@ -12,10 +12,8 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy import or_, and_
 
 from models import db, StreamForwardTask, Device
-from app.utils.device_conflict_checker import (
-    check_device_conflict_with_algorithm_tasks,
-    format_conflict_message
-)
+# 注意：已移除冲突检查，推流转发任务和算法任务可以共存
+# 推流转发任务使用 rtmp_stream/http_stream，算法任务使用 ai_rtmp_stream/ai_http_stream
 import json
 
 logger = logging.getLogger(__name__)
@@ -36,12 +34,8 @@ def create_stream_forward_task(task_name: str,
         for dev_id in device_id_list:
             Device.query.get_or_404(dev_id)
         
-        # 检查摄像头是否已经在启用的算法任务中使用
-        if device_id_list:
-            has_conflict, conflicts = check_device_conflict_with_algorithm_tasks(device_id_list)
-            if has_conflict:
-                conflict_msg = format_conflict_message(conflicts, 'algorithm')
-                raise ValueError(f"摄像头冲突：{conflict_msg}。同一个摄像头不能同时用于推流转发和算法任务。")
+        # 注意：推流转发任务和算法任务可以共存，因为它们使用不同的流地址
+        # 推流转发任务使用 rtmp_stream/http_stream，算法任务使用 ai_rtmp_stream/ai_http_stream
         
         # 生成任务编号
         task_code = f"STREAM_FORWARD_{uuid.uuid4().hex[:8].upper()}"
@@ -100,12 +94,8 @@ def update_stream_forward_task(task_id: int, **kwargs) -> StreamForwardTask:
             for dev_id in device_id_list:
                 Device.query.get_or_404(dev_id)
             
-            # 检查摄像头是否已经在启用的算法任务中使用（排除当前任务）
-            if device_id_list:
-                has_conflict, conflicts = check_device_conflict_with_algorithm_tasks(device_id_list, exclude_task_id=task_id)
-                if has_conflict:
-                    conflict_msg = format_conflict_message(conflicts, 'algorithm')
-                    raise ValueError(f"摄像头冲突：{conflict_msg}。同一个摄像头不能同时用于推流转发和算法任务。")
+            # 注意：推流转发任务和算法任务可以共存，因为它们使用不同的流地址
+            # 推流转发任务使用 rtmp_stream/http_stream，算法任务使用 ai_rtmp_stream/ai_http_stream
             
             # 更新关联设备（安全地更新，避免重复插入）
             devices = Device.query.filter(Device.id.in_(device_id_list)).all()
@@ -242,12 +232,8 @@ def start_stream_forward_task(task_id: int) -> tuple[StreamForwardTask, str, boo
         if not task.devices or len(task.devices) == 0:
             raise ValueError("推流转发任务必须关联至少一个摄像头")
         
-        # 检查摄像头是否已经在启用的算法任务中使用
-        device_ids = [d.id for d in task.devices]
-        has_conflict, conflicts = check_device_conflict_with_algorithm_tasks(device_ids)
-        if has_conflict:
-            conflict_msg = format_conflict_message(conflicts, 'algorithm')
-            raise ValueError(f"摄像头冲突：{conflict_msg}。同一个摄像头不能同时用于推流转发和算法任务。")
+        # 注意：推流转发任务和算法任务可以共存，因为它们使用不同的流地址
+        # 推流转发任务使用 rtmp_stream/http_stream，算法任务使用 ai_rtmp_stream/ai_http_stream
         
         # 启动任务
         from .stream_forward_launcher_service import start_stream_forward_task as launcher_start

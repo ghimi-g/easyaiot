@@ -32,7 +32,7 @@ import {
   updateStreamForwardTask,
   type StreamForwardTask,
 } from '@/api/device/stream_forward';
-import { getDeviceList, getDeviceConflicts } from '@/api/device/camera';
+import { getDeviceList } from '@/api/device/camera';
 
 defineOptions({ name: 'StreamForwardModal' });
 
@@ -203,24 +203,15 @@ const [registerForm, { setFieldsValue, resetFields, validate, updateSchema }] = 
 
 const loadDeviceOptions = async () => {
   try {
-    // 并行加载设备列表和冲突列表
-    const [deviceResponse, conflictResponse] = await Promise.all([
-      getDeviceList({ pageNo: 1, pageSize: 1000 }),
-      getDeviceConflicts('stream_forward')
-    ]);
+    // 加载设备列表（推流转发任务和算法任务可以共存，不再检查冲突）
+    const deviceResponse = await getDeviceList({ pageNo: 1, pageSize: 1000 });
     
     if (deviceResponse.code === 0 && deviceResponse.data) {
-      // 获取冲突的摄像头ID列表
-      const conflictDeviceIds = conflictResponse.code === 0 && conflictResponse.data 
-        ? new Set(conflictResponse.data) 
-        : new Set();
-      
       deviceOptions.value = deviceResponse.data.map((device: any) => {
-        const isDisabled = conflictDeviceIds.has(device.id);
         return {
-          label: `${device.name || device.id}${isDisabled ? ' (已在算法任务中使用)' : ''}`,
+          label: device.name || device.id,
           value: device.id,
-          disabled: isDisabled,
+          disabled: false,
         };
       });
       

@@ -106,10 +106,6 @@ def create_task():
         return jsonify({'code': 400, 'msg': str(e)}), 400
     except Exception as e:
         logger.error(f'创建推流转发任务失败: {str(e)}', exc_info=True)
-        # 检查是否是摄像头冲突错误
-        error_msg = str(e)
-        if '摄像头冲突' in error_msg or '不能同时用于' in error_msg:
-            return jsonify({'code': 400, 'msg': error_msg}), 400
         return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
 
 
@@ -146,10 +142,6 @@ def update_task(task_id):
         return jsonify({'code': 400, 'msg': str(e)}), 400
     except Exception as e:
         logger.error(f'更新推流转发任务失败: {str(e)}', exc_info=True)
-        # 检查是否是摄像头冲突错误
-        error_msg = str(e)
-        if '摄像头冲突' in error_msg or '不能同时用于' in error_msg:
-            return jsonify({'code': 400, 'msg': error_msg}), 400
         return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
 
 
@@ -187,10 +179,6 @@ def start_task(task_id):
         return jsonify({'code': 400, 'msg': str(e)}), 400
     except Exception as e:
         logger.error(f'启动推流转发任务失败: {str(e)}', exc_info=True)
-        # 检查是否是摄像头冲突错误
-        error_msg = str(e)
-        if '摄像头冲突' in error_msg or '不能同时用于' in error_msg:
-            return jsonify({'code': 400, 'msg': error_msg}), 400
         return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
 
 

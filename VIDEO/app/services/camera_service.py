@@ -160,6 +160,8 @@ def _to_dict(camera: Device) -> dict:
         'source': camera.source,
         'rtmp_stream': camera.rtmp_stream,
         'http_stream': camera.http_stream,
+        'ai_rtmp_stream': camera.ai_rtmp_stream,
+        'ai_http_stream': camera.ai_http_stream,
         'enable_forward': camera.enable_forward,
         'stream': camera.stream,
         'ip': camera.ip,
@@ -441,15 +443,15 @@ def _get_stream(rtsp_url: str, stream: int) -> str:
     return rtsp_url
 
 
-def _generate_stream_urls(source: str, device_id: str) -> tuple[str, str]:
-    """根据源地址生成RTMP和HTTP播放地址
+def _generate_stream_urls(source: str, device_id: str) -> tuple[str, str, str, str]:
+    """根据源地址生成RTMP和HTTP播放地址，以及AI推流地址和AI HTTP地址
     
     Args:
         source: 源地址（RTSP、RTMP或HTTP）
         device_id: 设备ID
         
     Returns:
-        tuple: (rtmp_stream, http_stream)
+        tuple: (rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream)
     """
     source_lower = source.strip().lower()
     
@@ -480,13 +482,24 @@ def _generate_stream_urls(source: str, device_id: str) -> tuple[str, str]:
             # HTTP流地址默认使用8080端口
             http_stream = f"http://{server}:8080/{http_path}"
             
-            return rtmp_stream, http_stream
+            # AI流地址使用不同的路径前缀
+            ai_path = f"ai/{device_id}" if not path.startswith('ai/') else path
+            ai_rtmp_stream = f"rtmp://{server}:{port}/{ai_path}"
+            if ai_path.endswith('.flv'):
+                ai_http_path = ai_path
+            else:
+                ai_http_path = f"{ai_path}.flv"
+            ai_http_stream = f"http://{server}:8080/{ai_http_path}"
+            
+            return rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream
         else:
             # 如果解析失败，使用默认格式
             server = '127.0.0.1'
             rtmp_stream = f"rtmp://{server}:1935/live/{device_id}"
             http_stream = f"http://{server}:8080/live/{device_id}.flv"
-            return rtmp_stream, http_stream
+            ai_rtmp_stream = f"rtmp://{server}:1935/ai/{device_id}"
+            ai_http_stream = f"http://{server}:8080/ai/{device_id}.flv"
+            return rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream
     elif is_http:
         # HTTP地址格式：http://ip:port/path 或 https://ip:port/path
         http_pattern = r'(https?)://([^:/]+)(?::(\d+))?(?:/(.*))?'
@@ -502,19 +515,28 @@ def _generate_stream_urls(source: str, device_id: str) -> tuple[str, str]:
             # HTTP播放地址直接使用源地址的端口和路径
             http_stream = f"{protocol}://{server}:{port}/{path}"
             
-            return rtmp_stream, http_stream
+            # AI流地址
+            ai_rtmp_stream = f"rtmp://{server}:1935/ai/{device_id}"
+            ai_http_stream = f"{protocol}://{server}:{port}/ai/{device_id}.flv"
+            
+            return rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream
         else:
             # 如果解析失败，使用默认格式
             server = '127.0.0.1'
             rtmp_stream = f"rtmp://{server}:1935/live/{device_id}"
             http_stream = f"http://{server}:8080/live/{device_id}.flv"
-            return rtmp_stream, http_stream
+            ai_rtmp_stream = f"rtmp://{server}:1935/ai/{device_id}"
+            ai_http_stream = f"http://{server}:8080/ai/{device_id}.flv"
+            return rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream
     else:
         # RTSP流，使用设备ID生成默认地址
         server = '127.0.0.1'
         rtmp_stream = f"rtmp://{server}:1935/live/{device_id}"
         http_stream = f"http://{server}:8080/live/{device_id}.flv"
-        return rtmp_stream, http_stream
+        # AI流地址使用不同的路径前缀
+        ai_rtmp_stream = f"rtmp://{server}:1935/ai/{device_id}"
+        ai_http_stream = f"http://{server}:8080/ai/{device_id}.flv"
+        return rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream
 
 
 def register_camera_by_onvif(ip: str, port: int, password: str) -> str:
@@ -591,9 +613,15 @@ def register_camera_by_onvif(ip: str, port: int, password: str) -> str:
     if not model:
         model = 'Camera-EasyAIoT'
     
-    # 生成RTMP和HTTP播放地址
+    # 生成RTMP和HTTP播放地址，以及AI流地址
     source = camera_info.get('source', '')
-    rtmp_stream, http_stream = _generate_stream_urls(source, device_id) if source else (f"rtmp://127.0.0.1:1935/live/{device_id}", f"http://127.0.0.1:8080/live/{device_id}.flv")
+    if source:
+        rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream = _generate_stream_urls(source, device_id)
+    else:
+        rtmp_stream = f"rtmp://127.0.0.1:1935/live/{device_id}"
+        http_stream = f"http://127.0.0.1:8080/live/{device_id}.flv"
+        ai_rtmp_stream = f"rtmp://127.0.0.1:1935/ai/{device_id}"
+        ai_http_stream = f"http://127.0.0.1:8080/ai/{device_id}.flv"
     
     camera = Device(
         id=device_id,
@@ -601,6 +629,8 @@ def register_camera_by_onvif(ip: str, port: int, password: str) -> str:
         source=camera_info.get('source'),
         rtmp_stream=rtmp_stream,
         http_stream=http_stream,
+        ai_rtmp_stream=ai_rtmp_stream,
+        ai_http_stream=ai_http_stream,
         stream=None,
         ip=camera_info.get('ip'),
         port=camera_info.get('port', port),
@@ -752,8 +782,8 @@ def register_camera(register_info: dict) -> str:
         if not model or not model.strip():
             model = 'Camera-EasyAIoT'
         
-        # 生成RTMP和HTTP播放地址
-        rtmp_stream, http_stream = _generate_stream_urls(source, id)
+        # 生成RTMP和HTTP播放地址，以及AI流地址
+        rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream = _generate_stream_urls(source, id)
         
         # 创建设备记录，优先使用用户提供的字段，缺失的字段从ONVIF获取的信息中填充
         camera = Device(
@@ -762,6 +792,8 @@ def register_camera(register_info: dict) -> str:
             source=source,
             rtmp_stream=rtmp_stream,
             http_stream=http_stream,
+            ai_rtmp_stream=ai_rtmp_stream,
+            ai_http_stream=ai_http_stream,
             stream=register_info.get('stream', 0),
             ip=ip or '',
             port=port,
@@ -846,9 +878,15 @@ def register_camera(register_info: dict) -> str:
     if not model:
         model = 'Camera-EasyAIoT'
     
-    # 生成RTMP和HTTP播放地址
+    # 生成RTMP和HTTP播放地址，以及AI流地址
     source = camera_info.get('source', '')
-    rtmp_stream, http_stream = _generate_stream_urls(source, id) if source else (f"rtmp://127.0.0.1:1935/live/{id}", f"http://127.0.0.1:8080/live/{id}.flv")
+    if source:
+        rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream = _generate_stream_urls(source, id)
+    else:
+        rtmp_stream = f"rtmp://127.0.0.1:1935/live/{id}"
+        http_stream = f"http://127.0.0.1:8080/live/{id}.flv"
+        ai_rtmp_stream = f"rtmp://127.0.0.1:1935/ai/{id}"
+        ai_http_stream = f"http://127.0.0.1:8080/ai/{id}.flv"
     
     camera = Device(
         id=id,  # 显式设置ID，确保使用传入的ID或生成的唯一ID
@@ -856,6 +894,8 @@ def register_camera(register_info: dict) -> str:
         source=camera_info.get('source'),
         rtmp_stream=rtmp_stream,
         http_stream=http_stream,
+        ai_rtmp_stream=ai_rtmp_stream,
+        ai_http_stream=ai_http_stream,
         stream=register_info.get('stream'),
         ip=camera_info.get('ip'),
         port=camera_info.get('port', 80),
