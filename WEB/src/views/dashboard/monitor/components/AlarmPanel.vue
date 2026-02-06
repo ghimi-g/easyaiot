@@ -137,45 +137,30 @@ const getTaskTypeClass = (alarm: any): string => {
   }
 }
 
-// 获取图片URL
+// 获取图片URL - 优先使用后台返回的 image_url (minio URL)
 const getImageUrl = (alarm: any): string | null => {
-  if (!alarm.image) return null
+  // 优先使用 image_url（后台返回的 minio URL）
+  let imageUrl = alarm.image_url || alarm.image
   
-  const imagePath = alarm.image
+  if (!imageUrl) return null
   
   // 如果是完整URL，直接返回
-  if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-    return imagePath
+  if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+    return imageUrl
   }
   
   // 如果是MinIO路径（以/api/v1/buckets开头），添加前端启动地址前缀
-  if (imagePath.startsWith('/api/v1/buckets')) {
-    return `${window.location.origin}${imagePath}`
+  if (imageUrl.startsWith('/api/v1/buckets')) {
+    return `${window.location.origin}${imageUrl}`
   }
   
   // 如果是相对路径（以/api开头），添加前端启动地址前缀
-  if (imagePath.startsWith('/api/')) {
-    return `${window.location.origin}${imagePath}`
+  if (imageUrl.startsWith('/api/')) {
+    return `${window.location.origin}${imageUrl}`
   }
   
-  // 如果是绝对路径（以/opt/、/data/、/var/等系统路径开头），通过API端点获取
-  if (imagePath.startsWith('/opt/') || imagePath.startsWith('/data/') || imagePath.startsWith('/var/') || imagePath.startsWith('/usr/') || imagePath.startsWith('/home/')) {
-    const apiUrl = import.meta.env.VITE_GLOB_API_URL || ''
-    // 对路径进行URL编码
-    const encodedPath = encodeURIComponent(imagePath)
-    return apiUrl ? `${apiUrl}/video/alert/image?path=${encodedPath}` : `/video/alert/image?path=${encodedPath}`
-  }
-  
-  // 其他以/开头的路径，也通过API端点获取（可能是其他绝对路径）
-  if (imagePath.startsWith('/')) {
-    const apiUrl = import.meta.env.VITE_GLOB_API_URL || ''
-    // 对路径进行URL编码
-    const encodedPath = encodeURIComponent(imagePath)
-    return apiUrl ? `${apiUrl}/video/alert/image?path=${encodedPath}` : `/video/alert/image?path=${encodedPath}`
-  }
-  
-  // 其他情况直接返回
-  return imagePath
+  // 其他情况直接返回（后台已经返回完整的 minio URL）
+  return imageUrl
 }
 
 // 处理图片加载错误

@@ -206,11 +206,12 @@ const downloadImage = (data, fileName = 'image.png') => {
 }
 
 const handleViewImage = (record) => {
-  if (record['image_path'] == null) {
+  if (record['image_url'] == null && record['image_path'] == null) {
     createMessage.warn('告警图片不存在');
     return;
   }
   openImageModal(true, {
+    image_url: record['image_url'],
     image_path: record['image_path'],
   });
 };

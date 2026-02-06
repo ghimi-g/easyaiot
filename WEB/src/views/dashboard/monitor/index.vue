@@ -86,11 +86,8 @@ const loadAlarmList = async () => {
     if (response && response.alert_list) {
       // 处理告警数据，确保格式正确
       alarmList.value = response.alert_list.map((item: any) => {
-        // 构建图片URL - 直接使用 image_path
-        let imageUrl = null
-        if (item.image_path) {
-          imageUrl = item.image_path
-        }
+        // 优先使用 image_url（后台返回的 minio URL），如果没有则使用 image_path
+        let imageUrl = item.image_url || item.image_path || null
         
         // 处理告警级别
         let level = item.level || '告警'

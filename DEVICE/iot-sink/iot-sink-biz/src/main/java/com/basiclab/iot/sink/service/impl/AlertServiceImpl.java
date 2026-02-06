@@ -441,6 +441,10 @@ public class AlertServiceImpl implements AlertService {
                 
                 log.info("抓拍图片上传到MinIO成功: bucket={}, object={}, minioPath={}", 
                         bucketName, objectName, minioPath);
+                
+                // 上传成功后删除本地文件，避免撑爆硬盘
+                deleteLocalImageFile(imageFile);
+                
                 return minioPath;
             }
 
@@ -605,6 +609,10 @@ public class AlertServiceImpl implements AlertService {
                 String encodedObjectName = URLEncoder.encode(objectName, StandardCharsets.UTF_8.toString());
                 String downloadUrl = String.format("/api/v1/buckets/%s/objects/download?prefix=%s",
                         bucketName, encodedObjectName);
+                
+                // 上传成功后删除本地文件，避免撑爆硬盘
+                deleteLocalImageFile(imageFile);
+                
                 return downloadUrl;
             }
 
@@ -994,6 +1002,35 @@ public class AlertServiceImpl implements AlertService {
         } catch (Exception e) {
             log.error("更新告警图片路径失败: alertId={}, minioPath={}, error={}", 
                     alertId, minioPath, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 删除本地告警图片文件
+     * 上传成功后调用，避免本地文件堆积撑爆硬盘
+     * 
+     * @param imageFile 本地图片文件对象
+     */
+    private void deleteLocalImageFile(File imageFile) {
+        if (imageFile == null) {
+            return;
+        }
+        
+        try {
+            if (imageFile.exists() && imageFile.isFile()) {
+                boolean deleted = imageFile.delete();
+                if (deleted) {
+                    log.info("本地告警图片已删除: {}", imageFile.getAbsolutePath());
+                } else {
+                    log.warn("本地告警图片删除失败（文件可能被占用）: {}", imageFile.getAbsolutePath());
+                }
+            } else {
+                log.debug("本地告警图片文件不存在，无需删除: {}", imageFile.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            // 删除失败不影响主流程，只记录日志
+            log.warn("删除本地告警图片文件异常: path={}, error={}", 
+                    imageFile.getAbsolutePath(), e.getMessage());
         }
     }
 

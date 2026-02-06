@@ -62,7 +62,7 @@
                   <div class="btn" @click="handleCopy(item)">
                     <Icon icon="tdesign:copy-filled" :size="15" color="#3B82F6" />
                   </div>
-                  <div class="btn" @click="handleViewImage(item)" v-if="item.image_path">
+                  <div class="btn" @click="handleViewImage(item)" v-if="item.image_url || item.image_path">
                     <Icon icon="ion:image-sharp" :size="15" color="#3B82F6" />
                   </div>
                   <div class="btn" @click="handleViewVideo(item)" v-if="item.device_id && item.time && !isSnapTask(item)">
@@ -393,7 +393,7 @@ async function handleCopyDeviceId(deviceId: string | null | undefined) {
 }
 
 async function handleViewImage(record: object) {
-  if (!record['image_path']) {
+  if (!record['image_url'] && !record['image_path']) {
     createMessage.warn('告警图片不存在');
     return;
   }
@@ -425,49 +425,41 @@ async function handleCopy(record: object) {
   createMessage.success('复制成功');
 }
 
-// 图片处理
-const imageUrls = reactive<Record<string, string>>({});
-const imageLoading = new Set<string>();
-
-function getImageUrl(imagePath: string) {
-  if (!imagePath) return '';
-  if (imageUrls[imagePath]) {
-    return imageUrls[imagePath];
+// 图片处理 - 直接使用后台返回的 minio URL
+function getImageUrl(imageUrl: string | null | undefined, imagePath: string | null | undefined): string {
+  // 优先使用 image_url（后台返回的 minio URL）
+  if (imageUrl) {
+    // 如果是完整URL，直接返回
+    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+      return imageUrl;
+    }
+    // 如果是MinIO路径（以/api/v1/buckets开头），添加前端启动地址前缀
+    if (imageUrl.startsWith('/api/v1/buckets')) {
+      return `${window.location.origin}${imageUrl}`;
+    }
+    // 其他相对路径，添加前端启动地址前缀
+    if (imageUrl.startsWith('/')) {
+      return `${window.location.origin}${imageUrl}`;
+    }
+    return imageUrl;
   }
-  // 异步加载图片
-  if (!imageLoading.has(imagePath)) {
-    imageLoading.add(imagePath);
-    loadImage(imagePath);
+  
+  // 如果没有 image_url，使用 image_path 作为后备
+  if (imagePath) {
+    if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+      return imagePath;
+    }
+    if (imagePath.startsWith('/api/v1/buckets')) {
+      return `${window.location.origin}${imagePath}`;
+    }
+    if (imagePath.startsWith('/')) {
+      return `${window.location.origin}${imagePath}`;
+    }
+    return imagePath;
   }
+  
   return '';
 }
-
-async function loadImage(imagePath: string) {
-  try {
-    const blob = await getAlertImage(imagePath);
-    const url = window.URL.createObjectURL(blob);
-    imageUrls[imagePath] = url;
-  } catch (error) {
-    console.error('加载图片失败:', error);
-    imageLoading.delete(imagePath);
-  }
-}
-
-function handleImageError(event: Event) {
-  const img = event.target as HTMLImageElement;
-  img.style.display = 'none';
-}
-
-// 清理图片 URL
-onUnmounted(() => {
-  Object.values(imageUrls).forEach((url) => {
-    window.URL.revokeObjectURL(url);
-  });
-  Object.keys(imageUrls).forEach((key) => {
-    delete imageUrls[key];
-  });
-  imageLoading.clear();
-});
 </script>
 
 <style lang="less" scoped>
