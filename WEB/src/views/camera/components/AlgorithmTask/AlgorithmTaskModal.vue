@@ -46,9 +46,10 @@ import {
   updateAlgorithmTask,
   type AlgorithmTask,
 } from '@/api/device/algorithm_task';
-import { getDeviceList } from '@/api/device/camera';
+import { getDeviceList, getDeviceInfo, registerDevice, updateDevice } from '@/api/device/camera';
 import { getModelPage } from '@/api/device/model';
 import { notifyTemplateQueryByType } from '@/api/device/notice';
+import { getDeviceChannels, queryVideoList } from '@/api/device/gb28181';
 import DefenseSchedulePicker from './DefenseSchedulePicker.vue';
 import ServiceStatusTab from './ServiceStatusTab.vue';
 
@@ -74,6 +75,7 @@ const alertNotificationConfig = ref<any>({
 });
 
 const deviceOptions = ref<Array<{ label: string; value: string }>>([]);
+const gbChannelOptionMap = ref<Map<string, { deviceId: string; channelId: string; name: string; label: string }>>(new Map());
 // 初始化时就包含默认模型，确保始终显示
 const defaultModels = [
   {
@@ -127,19 +129,150 @@ const placeholders = [
   { placeholder: '${record_path}', description: '录像路径' },
 ];
 
+const GB28181_OPTION_PREFIX = 'gb28181:';
+const GB28181_SOURCE_PREFIX = 'gb28181://';
+
+const buildGb28181OptionValue = (deviceId: string, channelId: string) =>
+  `${GB28181_OPTION_PREFIX}${deviceId}:${channelId}`;
+
+const buildGb28181VirtualDeviceId = (deviceId: string, channelId: string) =>
+  `gb28181_${deviceId}_${channelId}`;
+
+const isGb28181OptionValue = (value: unknown): value is string =>
+  typeof value === 'string' && value.startsWith(GB28181_OPTION_PREFIX);
+
+const extractListData = (response: any) => {
+  if (Array.isArray(response)) {
+    return response;
+  }
+  if (Array.isArray(response?.data)) {
+    return response.data;
+  }
+  if (Array.isArray(response?.data?.list)) {
+    return response.data.list;
+  }
+  if (Array.isArray(response?.list)) {
+    return response.list;
+  }
+  return [];
+};
+
+const normalizeGb28181Channel = (item: any) => {
+  const deviceId = String(
+    item?.parentId || item?.parentDeviceId || item?.gbParentId || item?.deviceIdentification || '',
+  ).trim();
+  const channelId = String(
+    item?.channelId || item?.deviceChannelId || item?.gbDeviceId || item?.deviceId || item?.id || item?.gbId || '',
+  ).trim();
+  if (!deviceId || !channelId) {
+    return null;
+  }
+
+  const channelName = item?.name || item?.channelName || item?.deviceName || item?.gbName || channelId;
+  return {
+    deviceId,
+    channelId,
+    name: channelName,
+    label: `[GB28181] ${channelName} (${channelId})`,
+  };
+};
+
+const buildDeviceOptionLabel = (item: any) => {
+  const isGbVirtualDevice =
+    typeof item?.source === 'string' && item.source.startsWith(GB28181_SOURCE_PREFIX);
+  const prefix = isGbVirtualDevice ? '[GB28181]' : '[直连]';
+  return `${prefix} ${item?.name || item?.id}`;
+};
+
+const ensureGb28181VideoDevice = async (optionValue: string) => {
+  const channel = gbChannelOptionMap.value.get(optionValue);
+  if (!channel) {
+    throw new Error(`未找到国标通道映射: ${optionValue}`);
+  }
+
+  const mappedDeviceId = buildGb28181VirtualDeviceId(channel.deviceId, channel.channelId);
+  const payload = {
+    id: mappedDeviceId,
+    name: channel.name,
+    source: `${GB28181_SOURCE_PREFIX}${channel.deviceId}/${channel.channelId}`,
+    cameraType: 'custom',
+    manufacturer: 'GB28181',
+    model: 'GB28181-Channel',
+    serial_number: channel.deviceId,
+    hardware_id: channel.channelId,
+  };
+
+  try {
+    await getDeviceInfo(mappedDeviceId);
+    await updateDevice(mappedDeviceId, payload);
+  } catch (error: any) {
+    const status = error?.response?.status;
+    const code = error?.response?.data?.code;
+    if (status === 404 || code === 400) {
+      await registerDevice(payload as any);
+    } else {
+      throw error;
+    }
+  }
+
+  return mappedDeviceId;
+};
+
+const syncSelectedDeviceIds = async (selectedValues: string[] = []) => {
+  const normalizedIds = await Promise.all(
+    (selectedValues || []).map(async (value) => {
+      if (isGb28181OptionValue(value)) {
+        return ensureGb28181VideoDevice(value);
+      }
+      return value;
+    }),
+  );
+  return Array.from(new Set(normalizedIds.filter(Boolean)));
+};
+
 // 加载设备列表
 const loadDevices = async () => {
   try {
-    // 加载设备列表（推流转发任务和算法任务可以共存，不再检查冲突）
-    const deviceResponse = await getDeviceList({ pageNo: 1, pageSize: 1000 });
+    // 设备来源包括：
+    // 1. VIDEO 自身摄像头表
+    // 2. GB28181 已注册但尚未同步为 VIDEO 设备的国标通道
+    const [deviceResponse, gbDeviceResponse] = await Promise.all([
+      getDeviceList({ pageNo: 1, pageSize: 1000 }),
+      queryVideoList({ pageNum: 1, pageSize: 1000, status: true }),
+    ]);
 
-    deviceOptions.value = (deviceResponse.data || []).map((item) => {
-      return {
-        label: item.name || item.id,
-        value: item.id,
-        disabled: false,
-      };
-    });
+    const currentDevices = extractListData(deviceResponse);
+    const currentDeviceIds = new Set(currentDevices.map((item) => String(item.id)));
+    const directOptions = currentDevices.map((item) => ({
+      label: buildDeviceOptionLabel(item),
+      value: item.id,
+      disabled: false,
+    }));
+
+    const gbDevices = extractListData(gbDeviceResponse);
+    const gbChannelResults = await Promise.allSettled(
+      gbDevices.map((device: any) => getDeviceChannels(device.deviceIdentification)),
+    );
+    const gbChannelList = gbChannelResults.flatMap((result: any) =>
+      result.status === 'fulfilled' ? extractListData(result.value) : [],
+    );
+
+    gbChannelOptionMap.value.clear();
+    const gbOptions = gbChannelList
+      .map((item: any) => normalizeGb28181Channel(item))
+      .filter((item: any) => !!item)
+      .filter((item: any) => !currentDeviceIds.has(buildGb28181VirtualDeviceId(item.deviceId, item.channelId)))
+      .map((item: any) => {
+        const optionValue = buildGb28181OptionValue(item.deviceId, item.channelId);
+        gbChannelOptionMap.value.set(optionValue, item);
+        return {
+          label: item.label,
+          value: optionValue,
+          disabled: false,
+        };
+      });
+
+    deviceOptions.value = [...directOptions, ...gbOptions];
 
     // 更新表单schema，设置禁用选项
     updateSchema({
@@ -917,6 +1050,8 @@ const handleSubmit = async () => {
     const values = await validate();
     confirmLoading.value = true;
     setDrawerProps({ confirmLoading: true });
+
+    values.device_ids = await syncSelectedDeviceIds(values.device_ids || []);
 
     // 新建任务时，默认设置为未启用状态（需要通过启动按钮来启动）
     if (modalData.value.type !== 'edit') {

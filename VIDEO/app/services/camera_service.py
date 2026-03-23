@@ -840,11 +840,13 @@ def register_camera(register_info: dict) -> str:
                 logger.warning(f'为设备 {id} 创建抓拍空间失败: {str(e)}，但不影响设备注册')
             
             # 自动检查并创建推流转发任务
-            try:
-                from app.services.stream_forward_service import ensure_device_stream_forward_task
-                ensure_device_stream_forward_task(id)
-            except Exception as e:
-                logger.warning(f'为设备 {id} 自动创建推流转发任务失败: {str(e)}，但不影响设备注册')
+            # GB28181 虚拟摄像头由算法任务在运行时动态向 WVP 拉流，不需要创建独立推流转发任务
+            if not source.strip().lower().startswith('gb28181://'):
+                try:
+                    from app.services.stream_forward_service import ensure_device_stream_forward_task
+                    ensure_device_stream_forward_task(id)
+                except Exception as e:
+                    logger.warning(f'为设备 {id} 自动创建推流转发任务失败: {str(e)}，但不影响设备注册')
             
             return id
         except Exception as e:

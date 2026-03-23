@@ -54,16 +54,22 @@ export const getBatchStreamStatus = (device_ids: string[]) => {
 export const registerDevice = (data: {
   id?: string;
   name: string;
-  ip: string;
-  port: number;
-  username: string;
-  password: string;
+  ip?: string;
+  port?: number;
+  username?: string;
+  password?: string;
+  source?: string;
+  cameraType?: string;
   stream?: number;
   enable_forward?: boolean;
   rtmp_stream?: string;
   http_stream?: string;
   ai_rtmp_stream?: string;
   ai_http_stream?: string;
+  manufacturer?: string;
+  model?: string;
+  serial_number?: string;
+  hardware_id?: string;
 }) => {
   return commonApi('post', `${CAMERA_PREFIX}/register/device`, data);
 };
@@ -91,12 +97,18 @@ export const updateDevice = (device_id: string, data: {
   port?: number;
   username?: string;
   password?: string;
+  source?: string;
+  cameraType?: string;
   stream?: number;
   enable_forward?: boolean;
   rtmp_stream?: string;
   http_stream?: string;
   ai_rtmp_stream?: string;
   ai_http_stream?: string;
+  manufacturer?: string;
+  model?: string;
+  serial_number?: string;
+  hardware_id?: string;
 }) => {
   return commonApi('put', `${CAMERA_PREFIX}/device/${device_id}`, data);
 };

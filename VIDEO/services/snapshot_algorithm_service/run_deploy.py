@@ -35,6 +35,7 @@ sys.path.insert(0, video_root)
 
 # 导入VIDEO模块的模型
 from models import db, AlgorithmTask, Device
+from app.utils.gb28181_source import resolve_gb28181_source
 
 
 def get_device():
@@ -400,8 +401,11 @@ def load_task_config():
             for device in task.devices:
                 # 刷新设备对象，确保获取最新的source
                 db_session.refresh(device)
-                # 输入流地址（支持RTSP和RTMP格式，从device.source获取）
-                rtsp_url = device.source if device.source else None
+                # 输入流地址（支持RTSP/RTMP，以及通过gb28181://虚拟源动态解析）
+                rtsp_url = resolve_gb28181_source(device.source, logger=logger) if device.source else None
+                if not rtsp_url:
+                    logger.warning(f"设备 {device.id} 未获取到可用输入流地址，跳过该设备")
+                    continue
                 device_streams[device.id] = {
                     'rtsp_url': rtsp_url,  # 输入流地址
                     'device_name': device.name or device.id
@@ -1834,4 +1838,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
