@@ -377,6 +377,8 @@ services:
       - "10002:10002/tcp" # RTSP 端口（内部）
       - "10003:10003/tcp" # RTP Proxy 端口
       - "30000-30500:30000-30500/udp" # RTP Proxy 端口范围
+      - "30000-30500:30000-30500/tcp"
+
     environment:
       - TZ=Asia/Shanghai
     volumes:
