@@ -237,11 +237,44 @@ def download_model_file(model_id: int, model_path: str) -> Optional[str]:
 
                 # 从MinIO下载（需要调用AI模块的服务或直接使用MinIO客户端）
                 logger.info(f"开始从MinIO下载模型文件: bucket={bucket_name}, object={object_key}")
-                # TODO: 实现MinIO下载逻辑
-                # 这里可以调用AI模块的API或直接使用MinIO客户端
-                # 暂时返回None，表示需要手动下载
-                logger.warning(f"MinIO下载功能待实现，请手动下载模型文件到: {local_path}")
-                return None
+                # 这里通过AI服务统一下载（与 realtime_algorithm_service 保持一致）
+                import requests
+                import os as os_module
+
+                ai_service_url = os_module.getenv('AI_SERVICE_URL', 'http://localhost:5000')
+                try:
+                    response = requests.post(
+                        f"{ai_service_url}/model/download_model_forVideo",
+                        headers={'X-Authorization': f'Bearer {os.getenv("JWT_TOKEN", "")}'},
+                        json={
+                            'bucket_name': bucket_name,
+                            'object_key': object_key,
+                            'destination_path': local_path
+                        },
+                        timeout=(5, 300)
+                    )
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get('code') == 0:
+                            if os.path.exists(local_path):
+                                logger.debug(f'模型下载完成: {local_path}')
+                                return local_path
+                            else:
+                                logger.error(f"下载返回成功但文件不存在: {local_path}")
+                                return None
+                        else:
+                            logger.warning(f"模型下载失败: {result}")
+                            return None
+                    else:
+                        try:
+                            err = response.json()
+                            logger.warning(f"模型下载失败: {err}")
+                        except Exception:
+                            logger.warning(f"模型下载失败: HTTP {response.status_code}, {response.text}")
+                        return None
+                except Exception as e:
+                    logger.warning(f"模型下载异常: {str(e)}")
+                    return None
 
             except Exception as e:
                 logger.error(f"解析MinIO URL失败: {str(e)}", exc_info=True)
@@ -328,6 +361,11 @@ def load_yolo_models(model_ids: List[int]) -> Dict[int, Any]:
                                 if local_path:
                                     model_path = local_path
                                 else:
+                                    # 对于MinIO下载URL，如果落盘失败则不要继续用URL当本地路径加载YOLO
+                                    if isinstance(model_path, str) and model_path.startswith('/api/v1/buckets/'):
+                                        logger.error(
+                                            f"模型 {model_id} 下载失败且仍为MinIO下载URL，跳过该模型以避免加载失败: {model_path}")
+                                        continue
                                     logger.warning(f"模型 {model_id} 下载失败，尝试使用原始路径")
                             else:
                                 logger.warning(f"获取模型 {model_id} 信息失败: {model_data.get('msg')}")
