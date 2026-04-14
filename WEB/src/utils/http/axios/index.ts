@@ -128,7 +128,15 @@ const transform: AxiosTransform = {
 
     const params = config.params || {}
     const data = config.data || false
-    formatDate && data && !isString(data) && formatRequestDate(data)
+    const isFormDataPayload = typeof FormData !== 'undefined' && data instanceof FormData
+
+    // FormData 交给浏览器自动设置 multipart boundary，避免后端 request.files 为空
+    if (isFormDataPayload && config.headers) {
+      delete (config.headers as Recordable)['Content-Type']
+      delete (config.headers as Recordable)['content-type']
+    }
+
+    formatDate && data && !isString(data) && !isFormDataPayload && formatRequestDate(data)
     if (config.method?.toUpperCase() === RequestEnum.GET) {
       if (!isString(params)) {
         // 给 get 请求加上时间戳参数，避免从缓存中拿数据。

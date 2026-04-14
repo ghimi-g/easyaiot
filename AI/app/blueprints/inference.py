@@ -319,6 +319,16 @@ def run_inference(model_id):
             except:
                 pass
     
+    # 兼容不同前端字段名：file / image_file / video_file
+    uploaded_file = (
+        request.files.get('file')
+        or request.files.get('image_file')
+        or request.files.get('video_file')
+    )
+    has_valid_upload_file = bool(
+        uploaded_file and getattr(uploaded_file, 'filename', None) and uploaded_file.filename.strip()
+    )
+
     # 验证必要参数
     if 'inference_type' not in data:
         return jsonify({'code': 400, 'msg': '缺少必要参数: inference_type'}), 400
@@ -332,8 +342,11 @@ def run_inference(model_id):
             return jsonify({'code': 400, 'msg': 'RTSP流地址格式不正确'}), 400
     elif inference_type in ['image', 'video']:
         # 对于图片和视频，必须提供input_source（URL）或文件上传
-        if not input_source and 'file' not in request.files:
+        if not input_source and not has_valid_upload_file:
             return jsonify({'code': 400, 'msg': '请提供输入源URL（input_source）或上传文件（file）'}), 400
+        # 前端可能传了空文件占位字段，避免后续读取到空文件
+        if not input_source and uploaded_file and not has_valid_upload_file:
+            return jsonify({'code': 400, 'msg': '上传文件为空，请重新选择文件后重试'}), 400
     else:
         return jsonify({'code': 400, 'msg': f'不支持的推理类型: {inference_type}'}), 400
     
@@ -372,10 +385,10 @@ def run_inference(model_id):
     actual_input_source = input_source
     uploaded_file_path = None
     
-    if inference_type in ['image', 'video'] and 'file' in request.files and not input_source:
+    if inference_type in ['image', 'video'] and has_valid_upload_file and not input_source:
         # 直接上传文件，需要先上传到MinIO
-        file = request.files['file']
-        if file.filename:
+        file = uploaded_file
+        if file and file.filename:
             try:
                 # 创建临时文件保存上传的文件
                 temp_dir = tempfile.mkdtemp()
@@ -467,9 +480,9 @@ def run_inference(model_id):
                 if uploaded_file_path and os.path.exists(uploaded_file_path):
                     # 如果已经上传到MinIO并保存了临时文件，使用临时文件路径
                     result = inference_service.inference_image(uploaded_file_path, parameters, record_id)
-                elif 'file' in request.files:
+                elif has_valid_upload_file:
                     # 直接文件上传（未上传到MinIO的情况，应该不会发生，但保留作为fallback）
-                    image_file = request.files['file']
+                    image_file = uploaded_file
                     # 重置文件指针到开头
                     image_file.seek(0)
                     result = inference_service.inference_image(image_file, parameters, record_id)
@@ -484,9 +497,10 @@ def run_inference(model_id):
                 
             elif inference_type == 'video':
                 # 支持URL或直接文件上传
-                if 'file' in request.files:
+                if has_valid_upload_file:
                     # 直接文件上传
-                    video_file = request.files['file']
+                    video_file = uploaded_file
+                    video_file.seek(0)
                     result = inference_service.inference_video(video_file, parameters, record_id)
                 else:
                     # 从URL下载文件，直接传递文件路径
