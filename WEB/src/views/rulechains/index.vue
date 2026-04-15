@@ -127,7 +127,6 @@ import Modal from './model.vue';
 import {useDrawer} from '@/components/Drawer';
 import Drawer from './drawer.vue';
 import {Tag} from 'ant-design-vue';
-import ProductCardList from "@/views/product/components/CardList/ProductCardList.vue";
 import RulechainCardList from "@/views/rulechains/components/CardList/RulechainCardList.vue";
 
 export default defineComponent({
@@ -135,7 +134,12 @@ export default defineComponent({
   methods: {flowsList},
   components: {
     RulechainCardList,
-    ProductCardList, BasicTable, TableAction, PopConfirmButton, Modal, Drawer, Tag
+    BasicTable,
+    TableAction,
+    PopConfirmButton,
+    Modal,
+    Drawer,
+    Tag,
   },
   setup() {
     const checkedKeys = ref<Array<string | number>>([]);
