@@ -91,7 +91,7 @@ import { useMessage } from '@/hooks/web/useMessage';
 import { Icon } from '@/components/Icon';
 import moment from 'moment';
 import ALERT from "@/assets/images/alert/alert.png";
-import { queryAlertCameras } from '@/api/device/calculate';
+import { alertCameraSelectProps } from '@/views/alert/Data';
 
 const ListItem = List.Item;
 
@@ -121,12 +121,7 @@ const [registerForm, { validate }] = useForm({
       field: `device_id`,
       label: `摄像头`,
       component: 'ApiSelect',
-      componentProps: {
-        api: queryAlertCameras,
-        resultField: 'data',
-        labelField: 'label',
-        valueField: 'value',
-      },
+      componentProps: alertCameraSelectProps,
       defaultValue: '',
     },
     {

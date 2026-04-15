@@ -1,6 +1,21 @@
 import {BasicColumn, FormProps} from "@/components/Table";
 import {queryAlertCameras} from "@/api/device/calculate";
 
+/** 告警列表摄像头筛选：与算法任务里摄像头下拉一致的模糊匹配（按名称） */
+export const alertCameraSelectProps = {
+  api: queryAlertCameras,
+  resultField: 'data',
+  labelField: 'label',
+  valueField: 'value',
+  showSearch: true,
+  filterOption: (input: string, option: any) => {
+    const q = String(input ?? '').toLowerCase();
+    const label = String(option?.label ?? '').toLowerCase();
+    const value = String(option?.value ?? '').toLowerCase();
+    return label.includes(q) || value.includes(q);
+  },
+};
+
 export function getBasicColumns(): BasicColumn[] {
   return [
     {
@@ -73,12 +88,7 @@ export function getFormConfig(): Partial<FormProps> {
         field: `device_id`,
         label: `摄像头`,
         component: 'ApiSelect',
-        componentProps: {
-          api: queryAlertCameras,
-          resultField: 'data',
-          labelField: 'label',
-          valueField: 'value',
-        },
+        componentProps: alertCameraSelectProps,
         defaultValue: '',
       },
       {
