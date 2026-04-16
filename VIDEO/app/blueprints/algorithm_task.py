@@ -92,6 +92,8 @@ def create_task():
             tracking_max_age=data.get('tracking_max_age', 25),
             tracking_smooth_alpha=data.get('tracking_smooth_alpha', 0.25),
             alert_event_enabled=data.get('alert_event_enabled', False),
+            face_detection_enabled=data.get('face_detection_enabled', True),
+            plate_detection_enabled=data.get('plate_detection_enabled', True),
             alert_notification_enabled=data.get('alert_notification_enabled', False),
             alert_notification_config=data.get('alert_notification_config'),
             cron_expression=data.get('cron_expression'),

@@ -162,6 +162,40 @@ EXTRACT_QUEUE_SIZE = int(os.getenv('EXTRACT_QUEUE_SIZE', '1'))  # 抽帧队列�
 # 检测工作线程数量（优化以提升处理能力）
 YOLO_WORKER_THREADS = int(os.getenv('YOLO_WORKER_THREADS', '2'))  # YOLO检测线程数（默认2，原1）
 
+FACE_CLASS_KEYWORDS = ('face', 'facial', 'person_face', '人脸')
+PLATE_CLASS_KEYWORDS = ('plate', 'license_plate', 'licence_plate', 'car_plate', '车牌')
+
+
+def _normalize_detection_class_name(class_name: str) -> str:
+    """标准化类别名，便于匹配中英文和不同命名风格。"""
+    return str(class_name or '').strip().lower().replace('-', '_').replace(' ', '_')
+
+
+def _is_face_class(class_name: str) -> bool:
+    normalized = _normalize_detection_class_name(class_name)
+    return any(keyword in normalized for keyword in FACE_CLASS_KEYWORDS)
+
+
+def _is_plate_class(class_name: str) -> bool:
+    normalized = _normalize_detection_class_name(class_name)
+    return any(keyword in normalized for keyword in PLATE_CLASS_KEYWORDS)
+
+
+def _should_keep_detection(class_name: str) -> bool:
+    """
+    根据任务配置过滤检测类别：
+    - 关闭人脸检测时，过滤人脸类结果
+    - 关闭车牌检测时，过滤车牌类结果
+    """
+    if not task_config:
+        return True
+
+    if _is_face_class(class_name) and not bool(getattr(task_config, 'face_detection_enabled', True)):
+        return False
+    if _is_plate_class(class_name) and not bool(getattr(task_config, 'plate_detection_enabled', True)):
+        return False
+    return True
+
 
 def _is_valid_model_file(path: str) -> bool:
     """检查模型文件是否真实存在且非空（避免“下载成功但没落盘/0字节”）"""
@@ -1715,6 +1749,8 @@ def yolo_detection_worker(worker_id: int):
                                     for box, conf, cls_id in zip(boxes, confidences, class_ids):
                                         x1, y1, x2, y2 = map(int, box)
                                         class_name = yolo_model.names[cls_id]
+                                        if not _should_keep_detection(class_name):
+                                            continue
                                         all_detections.append({
                                             'class_id': int(cls_id),
                                             'class_name': class_name,

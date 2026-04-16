@@ -47,6 +47,8 @@ export interface AlgorithmTask {
   tracking_smooth_alpha?: number; // 追踪平滑系数
   // 告警配置
   alert_event_enabled?: boolean; // 是否启用告警事件
+  face_detection_enabled?: boolean; // 是否启用人脸检测
+  plate_detection_enabled?: boolean; // 是否启用车牌检测
   alert_notification_enabled?: boolean; // 是否启用告警通知
   alert_notification_config?: {
     channels: Array<{
@@ -118,6 +120,8 @@ export const createAlgorithmTask = (data: {
   tracking_smooth_alpha?: number;
   // 告警配置
   alert_event_enabled?: boolean;
+  face_detection_enabled?: boolean;
+  plate_detection_enabled?: boolean;
   alert_notification_enabled?: boolean;
   alert_notification_config?: {
     channels: Array<{

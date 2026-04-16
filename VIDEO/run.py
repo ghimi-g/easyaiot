@@ -313,6 +313,8 @@ def create_app():
                         ('frame_skip', 'INTEGER NOT NULL DEFAULT 1'),
                         ('total_captures', 'INTEGER NOT NULL DEFAULT 0'),
                         ('last_capture_time', 'TIMESTAMP'),
+                        ('face_detection_enabled', 'BOOLEAN NOT NULL DEFAULT TRUE'),
+                        ('plate_detection_enabled', 'BOOLEAN NOT NULL DEFAULT TRUE'),
                         ('service_server_ip', 'VARCHAR(45)'),
                         ('service_port', 'INTEGER'),
                         ('service_process_id', 'INTEGER'),

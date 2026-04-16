@@ -617,6 +617,28 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
       ifShow: ({ values }) => (values.task_type === 'realtime' || values.task_type === 'snap') && values.alert_event_enabled,
     },
     {
+      field: 'face_detection_enabled',
+      label: '启用人脸检测',
+      component: 'Switch',
+      componentProps: {
+        checkedChildren: '是',
+        unCheckedChildren: '否',
+      },
+      helpMessage: '关闭后将过滤人脸相关检测结果',
+      ifShow: ({ values }) => values.task_type === 'realtime' || values.task_type === 'snap',
+    },
+    {
+      field: 'plate_detection_enabled',
+      label: '启用车牌检测',
+      component: 'Switch',
+      componentProps: {
+        checkedChildren: '是',
+        unCheckedChildren: '否',
+      },
+      helpMessage: '关闭后将过滤车牌相关检测结果',
+      ifShow: ({ values }) => values.task_type === 'realtime' || values.task_type === 'snap',
+    },
+    {
       field: 'notification_channels',
       label: '通知渠道',
       component: 'Select',
@@ -867,6 +889,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       tracking_max_age: record.tracking_max_age || 25,
       tracking_smooth_alpha: record.tracking_smooth_alpha || 0.25,
       alert_event_enabled: record.alert_event_enabled !== undefined ? record.alert_event_enabled : false,
+      face_detection_enabled: record.face_detection_enabled !== undefined ? record.face_detection_enabled : true,
+      plate_detection_enabled: record.plate_detection_enabled !== undefined ? record.plate_detection_enabled : true,
       alert_notification_enabled: record.alert_notification_enabled !== undefined ? record.alert_notification_enabled : false,
       notification_channels: notificationChannels.value,
       is_full_day_defense: fullDayDefense,
@@ -893,6 +917,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
         { field: 'tracking_max_age', componentProps: { disabled: true } },
         { field: 'tracking_smooth_alpha', componentProps: { disabled: true } },
         { field: 'alert_event_enabled', componentProps: { disabled: true } },
+        { field: 'face_detection_enabled', componentProps: { disabled: true } },
+        { field: 'plate_detection_enabled', componentProps: { disabled: true } },
         { field: 'alert_notification_enabled', componentProps: { disabled: true } },
         { field: 'notification_channels', componentProps: { disabled: true } },
         { field: 'notification_templates', componentProps: { disabled: true } },
@@ -914,6 +940,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
         { field: 'tracking_max_age', componentProps: { disabled: false } },
         { field: 'tracking_smooth_alpha', componentProps: { disabled: false } },
         { field: 'alert_event_enabled', componentProps: { disabled: false } },
+        { field: 'face_detection_enabled', componentProps: { disabled: false } },
+        { field: 'plate_detection_enabled', componentProps: { disabled: false } },
         { field: 'alert_notification_enabled', componentProps: { disabled: false } },
         { field: 'notification_channels', componentProps: { disabled: false } },
         { field: 'notification_templates', componentProps: { disabled: false } },
@@ -937,6 +965,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       { field: 'tracking_max_age', componentProps: { disabled: false } },
       { field: 'tracking_smooth_alpha', componentProps: { disabled: false } },
       { field: 'alert_event_enabled', componentProps: { disabled: false } },
+      { field: 'face_detection_enabled', componentProps: { disabled: false } },
+      { field: 'plate_detection_enabled', componentProps: { disabled: false } },
       { field: 'alert_notification_enabled', componentProps: { disabled: false } },
       { field: 'notification_channels', componentProps: { disabled: false } },
       { field: 'notification_templates', componentProps: { disabled: false } },
@@ -952,6 +982,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       tracking_max_age: 25,
       tracking_smooth_alpha: 0.25,
       alert_event_enabled: false, // 默认关闭告警事件
+      face_detection_enabled: true, // 默认开启人脸检测
+      plate_detection_enabled: true, // 默认开启车牌检测
       notification_channels: [],
       is_full_day_defense: true, // 默认全天布防
     });
@@ -1189,6 +1221,8 @@ const handleReset = () => {
       tracking_max_age: 25,
       tracking_smooth_alpha: 0.25,
       alert_event_enabled: false, // 默认关闭告警事件
+      face_detection_enabled: true, // 默认开启人脸检测
+      plate_detection_enabled: true, // 默认开启车牌检测
       is_full_day_defense: true, // 默认全天布防
     });
     // 重置布防时段为默认值（全天布防）
@@ -1231,6 +1265,8 @@ const handleReset = () => {
       tracking_max_age: record.tracking_max_age || 25,
       tracking_smooth_alpha: record.tracking_smooth_alpha || 0.25,
       alert_event_enabled: record.alert_event_enabled !== undefined ? record.alert_event_enabled : false,
+      face_detection_enabled: record.face_detection_enabled !== undefined ? record.face_detection_enabled : true,
+      plate_detection_enabled: record.plate_detection_enabled !== undefined ? record.plate_detection_enabled : true,
       is_full_day_defense: fullDayDefense,
     });
 

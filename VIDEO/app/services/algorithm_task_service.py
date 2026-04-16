@@ -315,6 +315,8 @@ def create_algorithm_task(task_name: str,
                          tracking_max_age: int = 25,
                          tracking_smooth_alpha: float = 0.25,
                          alert_event_enabled: bool = False,
+                         face_detection_enabled: bool = True,
+                         plate_detection_enabled: bool = True,
                          alert_notification_enabled: bool = False,
                          alert_notification_config: Optional[str] = None,
                          cron_expression: Optional[str] = None,
@@ -511,6 +513,8 @@ def create_algorithm_task(task_name: str,
             tracking_max_age=tracking_max_age if task_type == 'realtime' else 25,
             tracking_smooth_alpha=tracking_smooth_alpha if task_type == 'realtime' else 0.25,
             alert_event_enabled=alert_event_enabled,
+            face_detection_enabled=face_detection_enabled,
+            plate_detection_enabled=plate_detection_enabled,
             alert_notification_enabled=alert_notification_enabled,
             alert_notification_config=alert_notification_config,
             space_id=None,
@@ -660,7 +664,8 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
             'model_ids', 'model_names',  # 模型配置
             'extract_interval',  # 实时算法任务配置（rtmp_input_url和rtmp_output_url不再使用，从摄像头列表获取）
             'tracking_enabled', 'tracking_similarity_threshold', 'tracking_max_age', 'tracking_smooth_alpha',  # 追踪配置
-            'alert_event_enabled', 'alert_notification_enabled', 'alert_notification_config',  # 告警配置
+            'alert_event_enabled', 'face_detection_enabled', 'plate_detection_enabled',
+            'alert_notification_enabled', 'alert_notification_config',  # 告警配置
             'cron_expression', 'frame_skip',  # 抓拍算法任务配置
             'is_enabled', 'status', 'exception_reason',
             'defense_mode', 'defense_schedule'
