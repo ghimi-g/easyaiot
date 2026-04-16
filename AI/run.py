@@ -319,7 +319,7 @@ def create_app():
 
     # 注册蓝图（延迟导入，避免在环境变量加载前就导入）
     try:
-        from app.blueprints import export, inference, model, train, train_task, llm, ocr, speech, deploy, auto_label
+        from app.blueprints import export, inference, model, train, train_task, llm, ocr, speech, deploy, auto_label, plate
         
         app.register_blueprint(export.export_bp, url_prefix='/model/export')
         app.register_blueprint(inference.inference_task_bp, url_prefix='/model/inference_task')
@@ -331,6 +331,7 @@ def create_app():
         app.register_blueprint(speech.speech_bp, url_prefix='/model/speech')
         app.register_blueprint(deploy.deploy_service_bp, url_prefix='/model/deploy_service')
         app.register_blueprint(auto_label.auto_label_bp, url_prefix='/model/dataset')  # 与其他模块保持一致，使用 /model/ 前缀
+        app.register_blueprint(plate.plate_bp, url_prefix='/model/plate')
         
         # 注册集群推理接口（使用不同的路由，不影响原有推理接口）
         from app.blueprints import cluster

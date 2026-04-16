@@ -86,6 +86,127 @@ class InferenceTask(db.Model):
     processing_time = db.Column(db.Float)  # 单位：秒
     stream_output_url = db.Column(db.String(500))
 
+
+class PlateAlgorithmVersion(db.Model):
+    """车牌算法版本表（独立于通用模型管理）"""
+    __tablename__ = 'plate_algorithm_version'
+
+    id = db.Column(db.Integer, primary_key=True)
+    version = db.Column(db.String(50), nullable=False, unique=True, index=True)
+    description = db.Column(db.Text, nullable=True)
+    base_model = db.Column(db.String(100), nullable=False, default='yolo11n.pt')
+    model_path = db.Column(db.String(500), nullable=True)  # MinIO下载URL
+    metrics_path = db.Column(db.String(500), nullable=True)  # 训练曲线CSV
+    train_results_path = db.Column(db.String(500), nullable=True)  # 训练结果图
+    status = db.Column(db.String(20), nullable=False, default='draft')  # draft/active/archived
+    is_active = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=beijing_now)
+    updated_at = db.Column(db.DateTime, default=beijing_now, onupdate=beijing_now)
+
+    train_tasks = db.relationship(
+        'PlateTrainTask',
+        backref=db.backref('version_obj', lazy=True),
+        lazy='dynamic'
+    )
+    inference_tasks = db.relationship(
+        'PlateInferenceTask',
+        backref=db.backref('version_obj', lazy=True),
+        lazy='dynamic'
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'version': self.version,
+            'description': self.description,
+            'base_model': self.base_model,
+            'model_path': self.model_path,
+            'metrics_path': self.metrics_path,
+            'train_results_path': self.train_results_path,
+            'status': self.status,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class PlateTrainTask(db.Model):
+    """车牌算法训练任务表"""
+    __tablename__ = 'plate_train_task'
+
+    id = db.Column(db.Integer, primary_key=True)
+    version_id = db.Column(db.Integer, db.ForeignKey('plate_algorithm_version.id'), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='preparing')  # preparing/running/completed/stopped/failed
+    progress = db.Column(db.Integer, nullable=False, default=0)
+    dataset_source = db.Column(db.String(1000), nullable=False)
+    dataset_local_path = db.Column(db.String(1000), nullable=True)
+    normalized_data_yaml = db.Column(db.String(1000), nullable=True)
+    hyperparameters = db.Column(db.Text, nullable=True)
+    train_log = db.Column(db.Text, nullable=False, default='')
+    error_message = db.Column(db.Text, nullable=True)
+    minio_model_path = db.Column(db.String(500), nullable=True)
+    metrics_path = db.Column(db.String(500), nullable=True)
+    train_results_path = db.Column(db.String(500), nullable=True)
+    start_time = db.Column(db.DateTime, default=beijing_now)
+    end_time = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=beijing_now)
+    updated_at = db.Column(db.DateTime, default=beijing_now, onupdate=beijing_now)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'version_id': self.version_id,
+            'status': self.status,
+            'progress': self.progress,
+            'dataset_source': self.dataset_source,
+            'dataset_local_path': self.dataset_local_path,
+            'normalized_data_yaml': self.normalized_data_yaml,
+            'hyperparameters': self.hyperparameters,
+            'train_log': self.train_log,
+            'error_message': self.error_message,
+            'minio_model_path': self.minio_model_path,
+            'metrics_path': self.metrics_path,
+            'train_results_path': self.train_results_path,
+            'start_time': self.start_time.isoformat() if self.start_time else None,
+            'end_time': self.end_time.isoformat() if self.end_time else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class PlateInferenceTask(db.Model):
+    """车牌算法推理任务表"""
+    __tablename__ = 'plate_inference_task'
+
+    id = db.Column(db.Integer, primary_key=True)
+    version_id = db.Column(db.Integer, db.ForeignKey('plate_algorithm_version.id'), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='processing')  # processing/completed/failed
+    input_source = db.Column(db.String(1000), nullable=True)
+    output_image_path = db.Column(db.String(500), nullable=True)
+    output_json_path = db.Column(db.String(500), nullable=True)
+    detection_count = db.Column(db.Integer, nullable=False, default=0)
+    result_preview = db.Column(db.Text, nullable=True)  # JSON字符串，保存部分检测结果
+    error_message = db.Column(db.Text, nullable=True)
+    processing_time = db.Column(db.Float, nullable=True)
+    created_at = db.Column(db.DateTime, default=beijing_now)
+    updated_at = db.Column(db.DateTime, default=beijing_now, onupdate=beijing_now)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'version_id': self.version_id,
+            'status': self.status,
+            'input_source': self.input_source,
+            'output_image_path': self.output_image_path,
+            'output_json_path': self.output_json_path,
+            'detection_count': self.detection_count,
+            'result_preview': self.result_preview,
+            'error_message': self.error_message,
+            'processing_time': self.processing_time,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
 class LLMModel(db.Model):
     """大模型配置表（简化版）"""
     __tablename__ = 'llm_config'
