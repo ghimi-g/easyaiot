@@ -131,7 +131,11 @@ class FFmpegDaemon:
                     "-rw_timeout",
                     str(rtsp_io_timeout_us),
                     "-fflags",
-                    "nobuffer+genpts",
+                    # 丢弃损坏包并生成时间戳：可减少“半边白/马赛克”持续时间（以连续性换取画面完整性）
+                    "nobuffer+discardcorrupt+genpts",
+                    # 忽略部分比特流错误，避免轻微抖动导致直接退出
+                    "-err_detect",
+                    "ignore_err",
                     "-flags",
                     "low_delay",
                     "-i",
