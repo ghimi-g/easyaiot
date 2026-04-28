@@ -60,16 +60,86 @@ class FFmpegDaemon:
 
         def daemon_task():
             while self._running:
-                # 关键修复：移除路径引号
+                # 说明：
+                # - 撕裂/下半发白/解码报错，常见诱因是上游转推重连后缺少关键帧或关键帧间隔过大；
+                #   增加关键帧频率并关闭B帧，可显著降低“重连后花屏/撕裂持续时间”。
+                # - RTSP 端异常（如 5XX）需要超时参数避免阻塞卡死，便于守护线程重启。
+                def _env_int(name: str, default: int) -> int:
+                    try:
+                        return int((os.getenv(name) or "").strip() or default)
+                    except Exception:
+                        return default
+
+                def _env_str(name: str, default: str) -> str:
+                    v = (os.getenv(name) or "").strip()
+                    return v if v else default
+
+                source_fps = _env_int("SOURCE_FPS", 25)
+                # GOP 默认：2秒一个关键帧（与服务内其他实现保持一致），避免重连后长时间等IDR
+                gop_size = _env_int("FFMPEG_GOP_SIZE", max(1, source_fps * 2))
+                preset = _env_str("FFMPEG_PRESET", "veryfast")
+                bitrate = _env_str("FFMPEG_VIDEO_BITRATE", "1500k")
+
+                rtsp_open_timeout_us = _env_int("FFMPEG_RTSP_OPEN_TIMEOUT_US", 10_000_000)  # 10s
+                rtsp_io_timeout_us = _env_int("FFMPEG_RTSP_IO_TIMEOUT_US", 5_000_000)  # 5s
+
                 ffmpeg_cmd = [
-                    'ffmpeg',
-                    '-rtsp_transport', 'tcp',
-                    '-i', device.source,  # 直接使用路径
-                    '-an',  # 禁用音频
-                    '-c:v', 'libx264',
-                    '-b:v', '512k',
-                    '-f', 'flv',
-                    f'{device.rtmp_stream}'
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "warning",
+
+                    # 输入：RTSP（TCP更稳），超时避免卡死
+                    "-rtsp_transport",
+                    "tcp",
+                    "-rtsp_flags",
+                    "prefer_tcp",
+                    "-stimeout",
+                    str(rtsp_open_timeout_us),
+                    "-rw_timeout",
+                    str(rtsp_io_timeout_us),
+                    "-fflags",
+                    "nobuffer+genpts",
+                    "-flags",
+                    "low_delay",
+                    "-i",
+                    device.source,
+
+                    # 输出：仅视频
+                    "-an",
+
+                    # 编码：低延迟 + 高频关键帧 + 无B帧，减少重连后花屏/撕裂
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    preset,
+                    "-tune",
+                    "zerolatency",
+                    "-b:v",
+                    bitrate,
+                    "-maxrate",
+                    bitrate,
+                    "-bufsize",
+                    bitrate,
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-profile:v",
+                    "main",
+                    "-g",
+                    str(max(1, gop_size)),
+                    "-keyint_min",
+                    str(max(1, source_fps)),
+                    "-sc_threshold",
+                    "0",
+                    "-bf",
+                    "0",
+
+                    # RTMP/FLV
+                    "-f",
+                    "flv",
+                    "-flvflags",
+                    "no_duration_filesize",
+                    device.rtmp_stream,
                 ]
 
                 # 启动进程并捕获错误流

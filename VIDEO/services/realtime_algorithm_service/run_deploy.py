@@ -203,6 +203,20 @@ from tracker import SimpleTracker
 # 加载环境变量
 load_dotenv()
 
+# OpenCV FFmpeg 解码参数（用于降低延迟并尽量忽略/丢弃损坏包）
+# 说明：当上游流发生抖动/重连/丢包时，FFmpeg 解码常出现 "error while decoding MB..."；
+# 该配置倾向于“丢弃损坏数据继续跑”，避免花屏/撕裂持续时间过长。
+if not os.getenv("OPENCV_FFMPEG_CAPTURE_OPTIONS"):
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+        "rtsp_transport;tcp"
+        "|stimeout;10000000"
+        "|rw_timeout;5000000"
+        "|max_delay;500000"
+        "|fflags;nobuffer+discardcorrupt+genpts"
+        "|flags;low_delay"
+        "|err_detect;ignore_err"
+    )
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -1992,7 +2006,8 @@ def buffer_streamer_worker(device_id: str):
                     ffmpeg_cmd = [
                         "ffmpeg",
                         "-y",
-                        "-fflags", "nobuffer",
+                        "-fflags", "nobuffer+flush_packets+genpts",
+                        "-flags", "low_delay",
                         "-f", "rawvideo",
                         "-vcodec", "rawvideo",
                         "-pix_fmt", "bgr24",

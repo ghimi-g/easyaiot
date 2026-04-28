@@ -172,6 +172,19 @@ from tracker import SimpleTracker
 # 加载环境变量
 load_dotenv()
 
+# OpenCV FFmpeg 解码参数（用于降低延迟并尽量忽略/丢弃损坏包）
+# 抓拍任务也会受上游流抖动影响，设置默认捕获选项可减少解码花屏/撕裂。
+if not os.getenv("OPENCV_FFMPEG_CAPTURE_OPTIONS"):
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+        "rtsp_transport;tcp"
+        "|stimeout;10000000"
+        "|rw_timeout;5000000"
+        "|max_delay;500000"
+        "|fflags;nobuffer+discardcorrupt+genpts"
+        "|flags;low_delay"
+        "|err_detect;ignore_err"
+    )
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
