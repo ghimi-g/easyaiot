@@ -34,8 +34,11 @@ RUN if [ -f pnpm-lock.yaml ]; then \
 # 复制源代码
 COPY . .
 
-# 构建项目（日志输出到文件，便于容器挂载后排查）
-RUN pnpm build 2>&1 | tee /tmp/web-build-logs/pnpm-build.log
+# 构建项目（日志写入文件；禁止用 | tee 包裹以免 pipe 只继承 tee 退出码导致构建失败仍继续）
+RUN set -e && \
+    pnpm build > /tmp/web-build-logs/pnpm-build.log 2>&1 || \
+    (echo "=== pnpm build failed, log: ===" && cat /tmp/web-build-logs/pnpm-build.log && exit 1)
+RUN test -d dist || (echo "=== dist missing after build ===" && cat /tmp/web-build-logs/pnpm-build.log && exit 1)
 
 # 生产阶段
 FROM nginx:1.29.2-alpine
@@ -43,8 +46,7 @@ FROM nginx:1.29.2-alpine
 # 配置国内镜像源（如果需要安装额外软件）
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 
-# 作者信息
-MAINTAINER basiclab
+LABEL org.opencontainers.image.authors="basiclab"
 
 # 设置工作目录
 WORKDIR /usr/share/nginx/html

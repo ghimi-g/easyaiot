@@ -25,8 +25,7 @@ logs
 *.swo
 *~
 
-# 锁定文件（不使用锁定文件，让容器内重新生成）
-pnpm-lock.yaml
+# 锁定文件需打进镜像，供 pnpm install --frozen-lockfile 复现依赖（勿排除）
 
 # Git相关
 .git
