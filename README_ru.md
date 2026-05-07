@@ -505,7 +505,7 @@ EasyAIoT — это проект с открытым исходным кодом
 Мы предоставляем различные способы сервиса, чтобы помочь вам глубже понять платформу и код EasyAIoT. Через документацию продукта, технические группы общения, платное обучение и другие способы вы получите следующие услуги:
 </p>
 
-<table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+<table style="width: 100%; table-layout: fixed; border-collapse: collapse; margin: 20px 0; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
 <thead>
 <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
 <th style="padding: 15px; text-align: left; font-weight: 600;">Сервисная позиция</th>
@@ -609,40 +609,40 @@ EasyAIoT — это проект с открытым исходным кодом
 Ниже представлены выдающиеся участники, внесшие значительный вклад в проект EasyAIoT. Их вклад сыграл ключевую роль в развитии проекта. Мы выражаем нашу самую искреннюю благодарность!
 </p>
 
-<table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+<table style="width: 100%; table-layout: fixed; border-collapse: collapse; margin: 20px 0; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
 <thead>
 <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-<th style="padding: 15px; text-align: left; font-weight: 600; border: 1px solid #e0e0e0; width: 28%;">Участник</th>
+<th style="padding: 15px; text-align: left; font-weight: 600; border: 1px solid #e0e0e0; width: 32%; min-width: 9rem;">Участник</th>
 <th style="padding: 15px; text-align: left; font-weight: 600; border: 1px solid #e0e0e0;">Вклад</th>
 </tr>
 </thead>
 <tbody>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">℡夏别</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">℡夏别</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Внес вклад в документацию по развертыванию Windows для проекта EasyAIoT, предоставив полное руководство по развертыванию для пользователей платформы Windows, значительно снизив сложность развертывания в средах Windows и позволив большему количеству пользователей легко использовать платформу EasyAIoT.</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">YiYaYiYaho</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">YiYaYiYaho</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Внес вклад в скрипт однокликового развертывания контейнеров Mac для проекта EasyAIoT, предоставив автоматизированное решение для развертывания для пользователей платформы Mac, значительно упростив процесс развертывания в средах Mac и улучшив опыт развертывания для разработчиков и пользователей.</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">山寒</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">山寒</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Внес вклад в скрипт развертывания контейнеров Linux для проекта EasyAIoT, предоставив решение для контейнеризованного развертывания для пользователей платформы Linux, достигнув быстрого и надежного развертывания контейнеров и обеспечив важные гарантии для стабильной работы в производственных средах.</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">玖零。</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">玖零。</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Внес вклад в скрипт развертывания контейнеров Linux для проекта EasyAIoT, дополнительно улучшив решение для контейнеризованного развертывания для платформ Linux, предоставив больше возможностей для пользователей различных дистрибутивов Linux и способствуя возможностям кроссплатформенного развертывания проекта.</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">爱吃小柚子</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">爱吃小柚子</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Внёс значительный вклад в развитие EasyAIoT в области видеонаблюдения и интеллектуального анализа: руководил и провёл сквозное согласование и проверочное тестирование национального стандарта GB28181 с бизнес-процессами на базе ИИ; также отвечал за целевое тестирование и оценку чёткости изображения и плавности воспроизведения, что дало важную основу для надёжности подключения по GB28181, стабильности каналов и дальнейшего улучшения качества просмотра.</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">Dark</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">Dark</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Внёс вклад в сквозную реализацию возможностей GB28181 для EasyAIoT в сфере видеонаблюдения по национальному стандарту: обеспечены воспроизведение видео и управление PTZ (поворотная платформа), благодаря чему подключение устройств по GB28181 стало пригодным для живого просмотра и удалённого управления камерой.</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">machh</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">machh</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Внёс вклад в проект EasyAIoT-Edge: выполнена сквозная проверка подключения камер и функций ИИ, а также согласованная связка возможностей в единый работоспособный контур на периферии.</td>
 </tr>
 </tbody>

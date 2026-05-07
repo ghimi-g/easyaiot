@@ -505,7 +505,7 @@ EasyAIoT est un projet d'apprentissage open source, sans lien avec des activité
 Nous offrons diverses méthodes de service pour vous aider à mieux comprendre la plateforme EasyAIoT et son code. Grâce à la documentation produit, aux groupes d'échange technique, à l'enseignement payant, etc., vous bénéficierez des services suivants :
 </p>
 
-<table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+<table style="width: 100%; table-layout: fixed; border-collapse: collapse; margin: 20px 0; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
 <thead>
 <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
 <th style="padding: 15px; text-align: left; font-weight: 600;">Élément de service</th>
@@ -609,40 +609,40 @@ Nous accueillons toutes les formes de contributions ! Que vous soyez développeu
 Voici les contributeurs exceptionnels qui ont apporté une contribution significative au projet EasyAIoT. Leurs contributions ont joué un rôle clé dans la promotion du développement du projet. Nous exprimons notre gratitude la plus sincère !
 </p>
 
-<table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+<table style="width: 100%; table-layout: fixed; border-collapse: collapse; margin: 20px 0; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
 <thead>
 <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-<th style="padding: 15px; text-align: left; font-weight: 600; border: 1px solid #e0e0e0; width: 28%;">Contributeur</th>
+<th style="padding: 15px; text-align: left; font-weight: 600; border: 1px solid #e0e0e0; width: 32%; min-width: 9rem;">Contributeur</th>
 <th style="padding: 15px; text-align: left; font-weight: 600; border: 1px solid #e0e0e0;">Contribution</th>
 </tr>
 </thead>
 <tbody>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">℡夏别</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">℡夏别</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">A contribué à la documentation de déploiement Windows pour le projet EasyAIoT, fournissant un guide de déploiement complet pour les utilisateurs de la plateforme Windows, réduisant considérablement la difficulté de déploiement dans les environnements Windows et permettant à plus d'utilisateurs d'utiliser facilement la plateforme EasyAIoT.</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">YiYaYiYaho</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">YiYaYiYaho</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">A contribué au script de déploiement en un clic de conteneurs Mac pour le projet EasyAIoT, fournissant une solution de déploiement automatisé pour les utilisateurs de la plateforme Mac, simplifiant considérablement le processus de déploiement dans les environnements Mac et améliorant l'expérience de déploiement pour les développeurs et les utilisateurs.</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">山寒</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">山寒</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">A contribué au script de déploiement de conteneurs Linux pour le projet EasyAIoT, fournissant une solution de déploiement conteneurisé pour les utilisateurs de la plateforme Linux, réalisant un déploiement de conteneurs rapide et fiable, et fournissant des garanties importantes pour un fonctionnement stable dans les environnements de production.</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">玖零。</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">玖零。</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">A contribué au script de déploiement de conteneurs Linux pour le projet EasyAIoT, améliorant davantage la solution de déploiement conteneurisé pour les plateformes Linux, fournissant plus d'options pour les utilisateurs de différentes distributions Linux et promouvant les capacités de déploiement multiplateforme du projet.</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">爱吃小柚子</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">爱吃小柚子</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Pour faire progresser EasyAIoT dans la vidéosurveillance et l'analyse intelligente, a dirigé et mené à bien l'intégration et les tests de validation de bout en bout entre la norme nationale GB28181 et les flux métier IA ; a également assuré des tests et une évaluation dédiés de la netteté d'image et de la fluidité de lecture, fournissant une base solide pour la fiabilité d'accès GB28181, la stabilité des liaisons et l'amélioration continue de l'expérience visuelle.</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">Dark</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">Dark</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">A contribué à l'intégration de bout en bout de GB28181 pour EasyAIoT en vidéosurveillance selon la norme nationale, avec lecture vidéo et commande PTZ (panoramique / inclinaison), rendant l'accès des équipements réellement exploitable pour la prévisualisation en direct et le pilotage à distance.</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 28%; white-space: nowrap;">machh</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">machh</span></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">A contribué au projet EasyAIoT-Edge en menant à bien la validation de bout en bout de l'intégration des caméras et des fonctions IA, et en reliant ces capacités pour former une chaîne fonctionnelle sur l'edge.</td>
 </tr>
 </tbody>
