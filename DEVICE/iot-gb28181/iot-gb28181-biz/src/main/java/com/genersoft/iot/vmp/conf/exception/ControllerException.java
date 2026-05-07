@@ -11,10 +11,12 @@ public class ControllerException extends RuntimeException{
     private String msg;
 
     public ControllerException(int code, String msg) {
+        super(msg);
         this.code = code;
         this.msg = msg;
     }
     public ControllerException(ErrorCode errorCode) {
+        super(errorCode.getMsg());
         this.code = errorCode.getCode();
         this.msg = errorCode.getMsg();
     }

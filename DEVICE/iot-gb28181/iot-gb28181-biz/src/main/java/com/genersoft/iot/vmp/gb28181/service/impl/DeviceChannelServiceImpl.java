@@ -15,6 +15,7 @@ import com.genersoft.iot.vmp.gb28181.event.EventPublisher;
 import com.genersoft.iot.vmp.gb28181.event.record.RecordInfoEndEvent;
 import com.genersoft.iot.vmp.gb28181.event.subscribe.catalog.CatalogEvent;
 import com.genersoft.iot.vmp.gb28181.service.IDeviceChannelService;
+import com.genersoft.iot.vmp.gb28181.service.IDeviceService;
 import com.genersoft.iot.vmp.gb28181.service.IInviteStreamService;
 import com.genersoft.iot.vmp.gb28181.service.IPlatformChannelService;
 import com.genersoft.iot.vmp.gb28181.transmit.cmd.ISIPCommander;
@@ -72,6 +73,9 @@ public class DeviceChannelServiceImpl implements IDeviceChannelService {
 
     @Autowired
     private DeviceMapper deviceMapper;
+
+    @Autowired
+    private IDeviceService deviceService;
 
     @Autowired
     private DeviceMobilePositionMapper deviceMobilePositionMapper;
@@ -225,7 +229,7 @@ public class DeviceChannelServiceImpl implements IDeviceChannelService {
 
     @Override
     public DeviceChannel getOne(String deviceId, String channelId){
-        Device device = deviceMapper.getDeviceByDeviceId(deviceId);
+        Device device = deviceService.getDeviceByDeviceId(deviceId);
         if (device == null) {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到设备：" + deviceId);
         }
@@ -234,7 +238,7 @@ public class DeviceChannelServiceImpl implements IDeviceChannelService {
 
     @Override
     public DeviceChannel getOneForSource(String deviceId, String channelId){
-        Device device = deviceMapper.getDeviceByDeviceId(deviceId);
+        Device device = deviceService.getDeviceByDeviceId(deviceId);
         if (device == null) {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到设备：" + deviceId);
         }
@@ -269,7 +273,7 @@ public class DeviceChannelServiceImpl implements IDeviceChannelService {
 
     @Override
     public List<DeviceChannel> queryChaneListByDeviceId(String deviceId) {
-        Device device = deviceMapper.getDeviceByDeviceId(deviceId);
+        Device device = deviceService.getDeviceByDeviceId(deviceId);
         if (device == null) {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到通道：" + deviceId);
         }
@@ -547,7 +551,7 @@ public class DeviceChannelServiceImpl implements IDeviceChannelService {
 
     @Override
     public PageInfo queryChannelsByDeviceId(String deviceId, String query, Boolean hasSubChannel, Boolean online, int page, int count) {
-        Device device = deviceMapper.getDeviceByDeviceId(deviceId);
+        Device device = deviceService.getDeviceByDeviceId(deviceId);
         if (device == null) {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到设备：" + deviceId);
         }

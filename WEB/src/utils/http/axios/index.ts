@@ -59,8 +59,11 @@ const transform: AxiosTransform = {
     }
     //  这里 code，result，message为 后台统一的字段，需要在 types.ts内修改为项目自己的接口返回格式
     const { code, msg, total } = data;
-    // 这里逻辑可以根据项目进行修改
-    const hasSuccess = data && Reflect.has(data, 'code') && code === ResultEnum.SUCCESS
+    // 默认约定 success 为 0；VIDEO 等子服务统一使用 JSON code:200 表示业务成功，需一并视为成功
+    const hasSuccess =
+      data &&
+      Reflect.has(data, 'code') &&
+      (code === ResultEnum.SUCCESS || code === ResultEnum.SUCCESS_HTTP_ENVELOPE)
     if (hasSuccess) {
       let successMsg = msg;
       if (isNull(successMsg) || isUnDef(successMsg) || isEmpty(successMsg)) {
