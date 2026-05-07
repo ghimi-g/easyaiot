@@ -271,6 +271,27 @@ function assignGb28181SplitScreenKeys(nodes: any[] | undefined, rootDeviceIdenti
   }
 }
 
+/**
+ * 通道树：国标 Parental=0 通常为摄像机/无再下级通道；SubCount>0 或 Parental=1 为子目录。
+ * 设备（叶子通道）不展示展开开关。
+ */
+function applyGb28181ChannelLeafFlags(nodes: any[] | undefined): void {
+  if (!nodes?.length) return;
+  for (const node of nodes) {
+    if (node.children?.length) {
+      applyGb28181ChannelLeafFlags(node.children);
+      node.isLeaf = false;
+      continue;
+    }
+    const subRaw = node.subCount ?? node.SubCount ?? 0;
+    const subCount = typeof subRaw === 'number' ? subRaw : Number(subRaw) || 0;
+    const pRaw = node.parental ?? node.gbParental;
+    const parentalNum = pRaw === undefined || pRaw === null || pRaw === '' ? null : Number(pRaw);
+    const isSubDirectory = subCount > 0 || parentalNum === 1;
+    node.isLeaf = !isSubDirectory;
+  }
+}
+
 async function handleSelect(selectedKeys: any, _info?: any) {
   const rawKey = Array.isArray(selectedKeys) ? selectedKeys[0] : selectedKeys;
   const keyStr = rawKey != null ? String(rawKey).trim() : '';
@@ -462,6 +483,7 @@ const onLoadData: TreeProps['loadData'] = (treeNode) => {
           const channels = res.data || res.list || [];
           const tmpLoop = handleTree(channels, 'deviceId');
           assignGb28181SplitScreenKeys(tmpLoop, sipId);
+          applyGb28181ChannelLeafFlags(tmpLoop);
 
           treeNode.dataRef.children = tmpLoop;
           treeNode.isLeaf = !tmpLoop?.length;
