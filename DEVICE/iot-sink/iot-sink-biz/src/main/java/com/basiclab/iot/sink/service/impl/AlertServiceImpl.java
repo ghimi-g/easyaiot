@@ -22,6 +22,9 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -142,8 +145,10 @@ public class AlertServiceImpl implements AlertService {
                 updateAlertImagePath(alertId, minioPath);
                 log.debug("告警 {} 图片路径已更新: {}", alertId, minioPath);
             } else if (minioPath == null) {
-                log.warn("告警 {} MinIO 上传失败，image_url 未写入: imagePath原始={}, minioClient可用={}, "
-                                + "请检查：①iot-sink 是否挂载与算法相同的告警目录(如 /app/alert_images)；②MINIO_URL 能否访问 MinIO；③桶 alert-images 权限",
+                // uploadImageToMinio 已在内部区分：文件不存在、未就绪、桶创建失败、putObject 异常等；此处勿统称「MinIO 失败」以免误导
+                log.warn("告警 {} 未写入 MinIO 访问路径(image_url 未更新): imagePath={}, minioClient已初始化={}。"
+                                + "请结合上一条相关 WARN：若为「告警图片文件不存在/不可用」则多为目录挂载、Kafka 积压或算法侧清理导致，未必是 MinIO；"
+                                + "若无前置 WARN 且怀疑对象存储，再检查 iot-sink 告警目录挂载、MINIO_URL、桶 alert-images 权限",
                         alertId, imagePath, minioClient != null);
             }
 
@@ -273,28 +278,41 @@ public class AlertServiceImpl implements AlertService {
     }
 
     /**
-     * 解析告警图片在本机的可读路径：优先绝对路径；否则尝试以 alert.images.base-dir（默认 /app）为根拼接。
+     * 解析告警图片在本机的可读路径：先按消息中的路径；若为相对路径则与 alert.images.base-dir（默认 /app）拼接。
+     * 不使用「去掉首字符 / 再拼到 base 下」的方式处理绝对路径，避免 /app/alert_images 被错解析为 /app/app/alert_images。
      */
     private File resolveLocalAlertImageFile(String imagePath) {
         if (!StringUtils.hasText(imagePath)) {
             return new File("");
         }
         String trimmed = imagePath.trim();
-        File direct = new File(trimmed);
-        if (direct.isFile()) {
-            return direct;
+        Path path = Paths.get(trimmed);
+        try {
+            if (Files.isRegularFile(path)) {
+                return path.toFile();
+            }
+        } catch (Exception ignored) {
+            // 路径非法等：交给后续返回默认 File 供上层 exists() 判断
         }
+
         String base = StringUtils.hasText(alertImagesBaseDir) ? alertImagesBaseDir.trim() : "/app";
-        if (base.endsWith("/") || base.endsWith(File.separator)) {
+        while (base.endsWith("/") || base.endsWith("\\")) {
             base = base.substring(0, base.length() - 1);
         }
-        String relative = trimmed.startsWith("/") ? trimmed.substring(1) : trimmed;
-        File underBase = new File(base + File.separator + relative);
-        if (underBase.isFile()) {
-            log.debug("告警图片路径解析成功: raw={}, resolved={}", imagePath, underBase.getAbsolutePath());
-            return underBase;
+        Path basePath = Paths.get(base);
+
+        if (!path.isAbsolute()) {
+            Path resolved = basePath.resolve(path).normalize();
+            try {
+                if (Files.isRegularFile(resolved)) {
+                    log.debug("告警图片路径解析成功: raw={}, resolved={}", imagePath, resolved);
+                    return resolved.toFile();
+                }
+            } catch (Exception ignored) {
+            }
         }
-        return direct;
+
+        return path.toFile();
     }
 
     /**
@@ -523,6 +541,7 @@ public class AlertServiceImpl implements AlertService {
     private String uploadImageToMinio(String imagePath, Integer alertId, String deviceId) {
         // 检查是否在清空后的等待期内
         if (isInCleanupWaitPeriod()) {
+            log.debug("告警图片上传跳过：MinIO 清空后等待期内，imagePath={}", imagePath);
             return null;
         }
 
