@@ -55,8 +55,10 @@ AI_RTSP_ASYNC_READ=0
 
 ## 代码位置
 
-- **类 `AsyncVideoStream`**、**`_async_rtsp_read_enabled()`**：`VIDEO/services/realtime_algorithm_service/run_deploy.py`（在 GPU 相关工具函数之后、全局 `device_caps` 等之前）。
-- **集成点**：`buffer_streamer_worker()` 中，在成功打开 **RTSP/RTMP** 后包装为 `AsyncVideoStream` 并 `start()`；主循环中通过 `read()` 取最新帧，并对「无帧但非失败」与 `read_failed` 分支做区分。
+- **共享实现**：`VIDEO/app/utils/async_video_stream.py`（**`AsyncVideoStream`**、**`async_rtsp_read_enabled()`**，环境变量 **`AI_RTSP_ASYNC_READ`**）。
+- **实时算法**：`VIDEO/services/realtime_algorithm_service/run_deploy.py` → `buffer_streamer_worker()`：打开 **RTSP/RTMP** 后按需包装异步对象；主循环区分 **`read_failed`** 与首帧等待（短睡眠）。
+- **推流转发**：`VIDEO/services/stream_forward_service/run_deploy.py` → 各设备读取器线程：逻辑同上（无实时算法的灰屏检测，但有读失败重试）。
+- **抓拍算法**：`VIDEO/services/snapshot_algorithm_service/run_deploy.py` → 抓拍缓流主循环：同上，并与原有 RTSP 灰屏重连逻辑共用 **`cap.release()`**。
 
 ## 使用与排查建议
 
@@ -90,3 +92,4 @@ AI_RTSP_ASYNC_READ=0
 
 - `VIDEO/docs/fix_stream_busy_error.md`：推流侧 StreamBusy 与冲突处理
 - `VIDEO/services/realtime_algorithm_service/env.example`：实时算法任务环境变量说明
+- `VIDEO/services/snapshot_algorithm_service/env.example`：抓拍服务（含 `AI_RTSP_ASYNC_READ` 说明）

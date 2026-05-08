@@ -40,6 +40,7 @@ sys.path.insert(0, video_root)
 from models import db, AlgorithmTask, Device
 from app.utils.gb28181_source import resolve_gb28181_source
 from app.utils.alert_images_paths import resolve_alert_images_root
+from app.utils.async_video_stream import AsyncVideoStream, async_rtsp_read_enabled
 
 
 def _parse_gpu_id_list(value: str) -> List[int]:
@@ -85,78 +86,6 @@ def _detect_visible_gpu_ids() -> List[int]:
         return list(range(n))
     except Exception:
         return []
-
-
-class AsyncVideoStream:
-    """
-    后台线程持续调用 VideoCapture.read() 解码，主线程只取锁内最新帧。
-    缓解 OpenCV read() 与缓流/推理串行导致的有效帧率被摄像头 fps 限制、灰屏误检等问题。
-    """
-
-    def __init__(self, capture: cv2.VideoCapture):
-        self._cap = capture
-        self._lock = threading.Lock()
-        self._frame = None
-        self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self.read_failed = False
-
-    def isOpened(self) -> bool:
-        return self._cap is not None and self._cap.isOpened()
-
-    def set(self, prop, value):
-        return self._cap.set(prop, value)
-
-    def read(self):
-        """与 cv2.VideoCapture.read 一致，返回 (ret, frame)。"""
-        if self.read_failed:
-            return False, None
-        with self._lock:
-            if self._frame is None:
-                return False, None
-            return True, self._frame.copy()
-
-    def start(self):
-        self._running = True
-        self.read_failed = False
-        self._thread = threading.Thread(target=self._update_loop, daemon=True)
-        self._thread.start()
-        return self
-
-    def _update_loop(self):
-        try:
-            while self._running:
-                ret, frame = self._cap.read()
-                if not ret or frame is None:
-                    # 仅在仍视为“运行中”时标记失败，避免 release() 后 read 返回误触发重连
-                    if self._running:
-                        self.read_failed = True
-                    break
-                with self._lock:
-                    self._frame = frame
-        except Exception:
-            if self._running:
-                self.read_failed = True
-
-    def release(self):
-        self._running = False
-        cap = self._cap
-        if cap is not None:
-            try:
-                cap.release()
-            except Exception:
-                pass
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-            self._thread = None
-        self._cap = None
-        with self._lock:
-            self._frame = None
-
-
-def _async_rtsp_read_enabled() -> bool:
-    v = (os.getenv("AI_RTSP_ASYNC_READ", "1") or "1").strip().lower()
-    return v not in ("0", "false", "no", "off")
 
 
 # GPU调度（按设备稳定映射到多张GPU，避免全部压到0号卡）
@@ -2008,7 +1937,7 @@ def buffer_streamer_worker(device_id: str):
 
                 retry_count = 0
                 if (
-                    _async_rtsp_read_enabled()
+                    async_rtsp_read_enabled()
                     and (rtsp_url.startswith("rtsp://") or rtsp_url.startswith("rtmp://"))
                 ):
                     cap = AsyncVideoStream(cap).start()

@@ -38,6 +38,7 @@ sys.path.insert(0, video_root)
 
 # 导入VIDEO模块的模型
 from models import db, StreamForwardTask, Device
+from app.utils.async_video_stream import AsyncVideoStream, async_rtsp_read_enabled
 
 # Flask应用实例（延迟创建）
 _flask_app = None
@@ -384,8 +385,8 @@ task_config = None
 # 简化架构：单队列直接传递帧
 # 帧队列：存储从RTSP读取的帧，直接传递给推流器
 frame_queues = {}  # {device_id: queue.Queue}
-# 摄像头流连接（VideoCapture对象）
-device_caps = {}  # {device_id: cv2.VideoCapture}
+# 摄像头流连接（VideoCapture 或 AsyncVideoStream）
+device_caps = {}  # {device_id: cv2.VideoCapture | AsyncVideoStream}
 # 摄像头推送进程（FFmpeg进程）
 device_pushers = {}  # {device_id: subprocess.Popen}
 # FFmpeg进程的stderr读取线程和错误信息
@@ -710,19 +711,47 @@ def buffer_worker(device_id: str):
                     continue
                 
                 retry_count = 0
+                if async_rtsp_read_enabled() and (
+                    rtsp_url.startswith("rtsp://") or rtsp_url.startswith("rtmp://")
+                ):
+                    cap = AsyncVideoStream(cap).start()
+                    logger.info(
+                        f"📌 设备 {device_id} 已启用异步拉流（AI_RTSP_ASYNC_READ；设为 0 可关闭）"
+                    )
                 device_caps[device_id] = cap
                 logger.info(f"✅ 设备 {device_id} {stream_type} 流连接成功")
             
-            # 从源流读取帧
+            # 从源流读取帧（异步模式下后台 decode，此处取缓冲区最新帧）
             ret, frame = cap.read()
             
             if not ret or frame is None:
+                if isinstance(cap, AsyncVideoStream):
+                    if cap.read_failed:
+                        logger.warning(f"设备 {device_id} 异步拉流结束或解码失败，重新连接...")
+                        if cap is not None:
+                            try:
+                                cap.release()
+                            except Exception:
+                                pass
+                            cap = None
+                            device_caps.pop(device_id, None)
+                        time.sleep(rtsp_read_fail_delay_sec)
+                        retry_count += 1
+                        if retry_count >= max_retries:
+                            logger.error(
+                                f"❌ 设备 {device_id} 读取帧失败次数过多，等待{rtsp_retry_cooldown_sec:.1f}秒后重新尝试..."
+                            )
+                            time.sleep(rtsp_retry_cooldown_sec)
+                            retry_count = 0
+                        continue
+                    time.sleep(0.002)
+                    continue
                 logger.warning(f"设备 {device_id} 读取源流帧失败，重新连接...")
                 # 清理当前连接
                 if cap is not None:
                     try:
                         cap.release()
-                    except:
+                    except Exception:
                         pass
                     cap = None
                     device_caps.pop(device_id, None)

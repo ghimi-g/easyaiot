@@ -39,6 +39,7 @@ sys.path.insert(0, video_root)
 from models import db, AlgorithmTask, Device
 from app.utils.gb28181_source import resolve_gb28181_source
 from app.utils.alert_images_paths import resolve_alert_images_root
+from app.utils.async_video_stream import AsyncVideoStream, async_rtsp_read_enabled
 
 
 def _parse_gpu_id_list(value: str) -> List[int]:
@@ -245,8 +246,8 @@ frame_counts = {}  # {device_id: int}
 extract_queues = {}  # {device_id: queue.Queue}
 detection_queues = {}  # {device_id: queue.Queue}
 push_queues = {}  # {device_id: queue.Queue}
-# 摄像头流连接（VideoCapture对象）
-device_caps = {}  # {device_id: cv2.VideoCapture}
+# 摄像头流连接（VideoCapture 或 AsyncVideoStream）
+device_caps = {}  # {device_id: cv2.VideoCapture | AsyncVideoStream}
 # 告警抑制：记录每个设备上次告警推送时间（抓拍算法任务不使用告警抑制）
 # 注意：抓拍算法任务不需要告警抑制，所有检测到的告警都会立即发送
 last_alert_time = {}  # {device_id: timestamp}（已废弃，不再使用）
@@ -1767,15 +1768,35 @@ def buffer_streamer_worker(device_id: str):
                     continue
 
                 retry_count = 0
+                if (
+                    async_rtsp_read_enabled()
+                    and (rtsp_url.startswith("rtsp://") or rtsp_url.startswith("rtmp://"))
+                ):
+                    cap = AsyncVideoStream(cap).start()
+                    logger.info(
+                        f"📌 设备 {device_id} 已启用异步拉流（AI_RTSP_ASYNC_READ=0 可关闭）"
+                    )
                 device_caps[device_id] = cap
                 logger.info(f"✅ 设备 {device_id} {stream_type} 流连接成功")
                 if rtsp_url.startswith("rtsp://"):
                     last_rtsp_connect_time = time.time()
 
-            # 从源流读取帧
+            # 从源流读取帧（异步模式下由后台线程 decode，此处取缓冲区最新帧）
             ret, frame = cap.read()
 
             if not ret or frame is None:
+                if isinstance(cap, AsyncVideoStream):
+                    if cap.read_failed:
+                        logger.warning(f"设备 {device_id} 异步拉流结束或解码失败，重新连接...")
+                        if cap is not None:
+                            cap.release()
+                            cap = None
+                            device_caps.pop(device_id, None)
+                        gray_bad_streak = 0
+                        time.sleep(rtsp_read_fail_delay_sec)
+                        continue
+                    time.sleep(0.002)
+                    continue
                 logger.warning(f"设备 {device_id} 读取源流帧失败，重新连接...")
                 if cap is not None:
                     cap.release()
