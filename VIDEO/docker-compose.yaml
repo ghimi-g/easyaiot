@@ -77,7 +77,6 @@ services:
       # 视频服务特有配置
       - MODEL_AI_PUSH_URL=${MODEL_AI_PUSH_URL:-pro.basiclab.top:1935}
       - CAMERA_ONLINE_INTERVAL=${CAMERA_ONLINE_INTERVAL:-10}
-      - CAMERA_DISCOVER_INTERVAL=${CAMERA_DISCOVER_INTERVAL:-60}
       # ONVIF配置（可选）
       - ONVIF_WSDL_DIR=${ONVIF_WSDL_DIR:-/etc/onvif/wsdl}
       # 时区配置

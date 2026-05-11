@@ -4,15 +4,12 @@
 @wechat EasyAIoT2025
 """
 import concurrent.futures
-import ipaddress
 import logging
 import os
-import requests
 import re
 import socket
 import time
 from functools import partial
-from sched import scheduler
 
 import tzlocal
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -197,7 +194,7 @@ def _add_online_monitor():
 
 
 def _discovery_cameras() -> list:
-    """发现网络中的ONVIF设备（同网段 + 可配置跨网段）"""
+    """发现网络中的 ONVIF 设备（同网段 WS-Discovery，不含跨网段扫描）。"""
     wsd = WSDiscovery()
     wsd.start()
     onvif_cameras = []
@@ -244,54 +241,7 @@ def _discovery_cameras() -> list:
         if hasattr(wsd, '_stopThreads'):
             wsd._stopThreads()
 
-    # 追加跨网段探测结果（通过环境变量配置网段）
-    for camera in _discovery_cameras_cross_subnet():
-        if not any(item['ip'] == camera['ip'] for item in onvif_cameras):
-            onvif_cameras.append(camera)
-
     return onvif_cameras
-
-
-def _parse_discovery_cidrs() -> list[ipaddress.IPv4Network]:
-    """解析跨网段扫描配置，返回IPv4网段列表。"""
-    cidr_raw = (os.getenv('CAMERA_DISCOVER_CIDRS', '') or '').strip()
-    networks: list[ipaddress.IPv4Network] = []
-    if cidr_raw:
-        for item in cidr_raw.split(','):
-            cidr = item.strip()
-            if not cidr:
-                continue
-            try:
-                net = ipaddress.ip_network(cidr, strict=False)
-                if isinstance(net, ipaddress.IPv4Network):
-                    networks.append(net)
-            except ValueError:
-                logger.warning(f'忽略无效的跨网段扫描配置: {cidr}')
-
-    # 自动使用“当前IP所在 /24 网段”（A.B.C.0/24）
-    use_local_c24 = (os.getenv('CAMERA_DISCOVER_USE_LOCAL_C24', 'false') or '').strip().lower() in (
-        '1', 'true', 'yes', 'on'
-    )
-    if use_local_c24:
-        for ip in _get_local_ipv4_addresses():
-            octets = ip.split('.')
-            if len(octets) != 4:
-                continue
-            try:
-                networks.append(ipaddress.ip_network(f'{octets[0]}.{octets[1]}.{octets[2]}.0/24', strict=False))
-            except ValueError:
-                continue
-
-    # 去重并保持顺序
-    dedup_networks = []
-    seen_networks = set()
-    for network in networks:
-        key = str(network)
-        if key in seen_networks:
-            continue
-        seen_networks.add(key)
-        dedup_networks.append(network)
-    return dedup_networks
 
 
 def _get_local_ipv4_addresses() -> list[str]:
@@ -372,114 +322,6 @@ def _default_stream_urls(device_id: str) -> tuple[str, str, str, str]:
         f'rtmp://{host}:1935/ai/{device_id}',
         f'http://{host}:8080/ai/{device_id}.flv',
     )
-
-
-def _parse_discovery_ports() -> list[int]:
-    """解析ONVIF跨网段探测端口列表。"""
-    ports_raw = (os.getenv('CAMERA_DISCOVER_PORTS', '80,8000,8080,8899') or '').strip()
-    ports: list[int] = []
-    for item in ports_raw.split(','):
-        item = item.strip()
-        if not item:
-            continue
-        try:
-            port = int(item)
-            if 1 <= port <= 65535:
-                ports.append(port)
-        except ValueError:
-            logger.warning(f'忽略无效端口配置: {item}')
-    return ports or [80, 8000, 8080, 8899]
-
-
-def _probe_onvif_endpoint(ip: str, port: int, connect_timeout: float) -> bool:
-    """探测指定IP:Port是否为ONVIF端点。"""
-    endpoint = f'http://{ip}:{port}/onvif/device_service'
-    soap_body = """<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"
-               xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
-  <soap:Body>
-    <tds:GetSystemDateAndTime/>
-  </soap:Body>
-</soap:Envelope>"""
-    try:
-        # 先做快速端口连通判断，避免大量HTTP超时
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(connect_timeout)
-        connect_result = sock.connect_ex((ip, port))
-        sock.close()
-        if connect_result != 0:
-            return False
-
-        resp = requests.post(
-            endpoint,
-            data=soap_body.encode('utf-8'),
-            headers={
-                'Content-Type': 'application/soap+xml; charset=utf-8'
-            },
-            timeout=connect_timeout
-        )
-        body = (resp.text or '').lower()
-
-        # 200: 返回SOAP；401/403: 设备要求鉴权但端点通常存在
-        if resp.status_code in (200, 401, 403):
-            return (
-                'onvif' in body
-                or 'getsystemdateandtime' in body
-                or 'soap' in body
-                or resp.status_code in (401, 403)
-            )
-    except Exception:
-        return False
-    return False
-
-
-def _discovery_cameras_cross_subnet() -> list:
-    """按配置网段执行跨网段ONVIF探测。"""
-    networks = _parse_discovery_cidrs()
-    if not networks:
-        return []
-
-    ports = _parse_discovery_ports()
-    connect_timeout = float(os.getenv('CAMERA_DISCOVER_CONNECT_TIMEOUT', '0.4'))
-    max_workers = int(os.getenv('CAMERA_DISCOVER_MAX_WORKERS', '64'))
-    max_hosts = int(os.getenv('CAMERA_DISCOVER_MAX_HOSTS', '4096'))
-
-    ips: list[str] = []
-    for net in networks:
-        for host in net.hosts():
-            ips.append(str(host))
-            if len(ips) >= max_hosts:
-                logger.warning(f'跨网段扫描主机数达到上限 {max_hosts}，剩余IP将跳过')
-                break
-        if len(ips) >= max_hosts:
-            break
-
-    if not ips:
-        return []
-
-    results: list[dict] = []
-
-    def scan_one(ip: str) -> dict | None:
-        for port in ports:
-            if _probe_onvif_endpoint(ip, port, connect_timeout):
-                return {
-                    'mac': None,
-                    'ip': ip,
-                    'hardware_name': None,
-                    'port': port,
-                    'discovery_mode': 'cross_subnet'
-                }
-        return None
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [pool.submit(scan_one, ip) for ip in ips]
-        for future in concurrent.futures.as_completed(futures):
-            item = future.result()
-            if item:
-                results.append(item)
-
-    logger.info(f'跨网段ONVIF探测完成，发现设备数: {len(results)}')
-    return results
 
 
 def _update_camera_ip(camera: Device, ip: str):
@@ -578,28 +420,15 @@ def search_camera() -> list:
 
 
 def _start_search(app=None):
-    """启动设备发现服务"""
+    """初始化摄像头连接与在线监控。
+
+    已不再注册后台定时 WS-Discovery / IP 刷新任务（曾由 CAMERA_DISCOVER_INTERVAL 驱动）。
+    需要按 MAC 刷新设备 IP 时请调用 ``refresh_camera``（如 POST ``/video/camera/refresh``）
+    或在界面点击「更新 ONVIF 设备」。
+    """
     ws_daemonlogger = logging.getLogger('daemon')
     ws_daemonlogger.setLevel(logging.ERROR)
 
-    # 确保环境变量转换为整数
-    discover_interval = int(os.getenv('CAMERA_DISCOVER_INTERVAL', 120))
-    
-    # 创建包装函数，将app对象传入refresh_camera
-    if app is not None:
-        def refresh_camera_with_app():
-            refresh_camera(app)
-        scheduler.add_job(refresh_camera_with_app, 'interval', seconds=discover_interval)
-    else:
-        # 如果没有app对象，尝试在运行时获取（可能失败）
-        scheduler.add_job(refresh_camera, 'interval', seconds=discover_interval)
-    
-    # 启动调度器（如果尚未启动）
-    if not scheduler.running:
-        scheduler.start()
-        logger.debug('调度器已启动')
-    
-    logger.debug('设备发现服务已启动，间隔: %d秒', discover_interval)
     _init_all_cameras()
     _add_online_monitor()
 
