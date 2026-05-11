@@ -10,7 +10,7 @@
   >
     <div class="product-modal">
       <Spin :spinning="state.editLoading">
-        <!-- 单机局域网 ONVIF 扫描：GET /video/camera/discovery，与 ONVIF 批量扫描接口无关 -->
+        <!-- 单机局域网 ONVIF 发现：GET /video/camera/discovery -->
         <div v-if="state.type === 'onvif'" class="onvif-scan-modal-body">
           <BasicTable @register="registerOnvifTable">
             <template #bodyCell="{ column, record }">

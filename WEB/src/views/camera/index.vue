@@ -149,16 +149,13 @@
         <TabPane key="9" tab="GB28181节点管理">
           <Gb28181Node ref="gb28181NodeRef"/>
         </TabPane>
-        <TabPane key="10" tab="ONVIF扫描">
-          <OnvifScan ref="onvifScanRef" />
-        </TabPane>
       </Tabs>
     </div>
   </div>
 </template>
 
 <script lang="ts" setup>
-import {nextTick, onMounted, onUnmounted, reactive, ref} from 'vue';
+import {onMounted, onUnmounted, reactive, ref} from 'vue';
 import {useRoute} from 'vue-router';
 import {TabPane, Tabs} from 'ant-design-vue';
 import {BasicTable, TableAction, useTable} from '@/components/Table';
@@ -188,7 +185,6 @@ import Gb28181SplitScreen from "@/views/gb28181/components/SplitScreen/index.vue
 import Gb28181Video from "@/views/gb28181/components/Video/index.vue";
 import Gb28181PullProxy from "@/views/gb28181/components/PullProxy/index.vue";
 import Gb28181Node from "@/views/gb28181/components/Node/index.vue";
-import OnvifScan from "./components/OnvifScan/index.vue";
 
 defineOptions({name: 'CAMERA'})
 
@@ -231,9 +227,8 @@ const gb28181SplitScreenRef = ref();
 const gb28181VideoRef = ref();
 const gb28181PullProxyRef = ref();
 const gb28181NodeRef = ref();
-const onvifScanRef = ref<{ refresh: () => void } | null>(null);
 
-/** 一级 Tab key：1 设备列表 … 10 ONVIF 扫描（与模板 TabPane key 一致） */
+/** 一级 Tab key：1 设备列表 … 9 GB28181 节点管理（与模板 TabPane key 一致） */
 const CAMERA_TAB_KEYS = {
   DEVICE_LIST: '1',
   DIRECTORY: '2',
@@ -244,12 +239,11 @@ const CAMERA_TAB_KEYS = {
   GB_SPLIT: '7',
   GB_PULL_PROXY: '8',
   GB_NODE: '9',
-  ONVIF: '10',
 } as const;
 
 const CAMERA_TAB_ID_SET = new Set<string>(Object.values(CAMERA_TAB_KEYS));
 
-/** 路由 ?tab=：仅接受 1～10 有效 key，非法则回退设备列表 */
+/** 路由 ?tab=：仅接受 1～9 有效 key，非法则回退设备列表 */
 function normalizeCameraRouteTab(tab: string): string {
   return CAMERA_TAB_ID_SET.has(tab) ? tab : CAMERA_TAB_KEYS.DEVICE_LIST;
 }
@@ -276,10 +270,6 @@ const handleTabClick = (activeKey: string) => {
   // 切换到推流转发标签页时，刷新数据
   if (activeKey === CAMERA_TAB_KEYS.STREAM_FORWARD && streamForwardRef.value) {
     streamForwardRef.value.refresh();
-  }
-  // 切换到 ONVIF 扫描时，刷新各子表
-  if (activeKey === CAMERA_TAB_KEYS.ONVIF && onvifScanRef.value) {
-    onvifScanRef.value.refresh();
   }
   // 切换到GB28181相关标签页时，可以在这里添加刷新逻辑
   // if (activeKey === CAMERA_TAB_KEYS.GB_SPLIT && gb28181SplitScreenRef.value) {
@@ -588,7 +578,7 @@ const openAddModal = (type, record = null) => {
   });
 };
 
-/** 单机实时 WS-Discovery（GET /video/camera/discovery），与 ONVIF 批量扫描 Tab 接口无关 */
+/** 单机实时 WS-Discovery（GET /video/camera/discovery） */
 const handleScanOnvif = () => openAddModal('onvif');
 
 /** 后台刷新已录入设备的 IP（POST /video/camera/refresh） */
@@ -667,11 +657,6 @@ onMounted(() => {
   if (tab) {
     state.activeKey = normalizeCameraRouteTab(tab);
   }
-  void nextTick(() => {
-    if (state.activeKey === CAMERA_TAB_KEYS.ONVIF && onvifScanRef.value) {
-      onvifScanRef.value.refresh();
-    }
-  });
 });
 
 // 组件卸载时清除定时器

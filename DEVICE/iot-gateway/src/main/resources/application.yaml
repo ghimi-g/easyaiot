@@ -6,19 +6,10 @@ spring:
     gateway:
       # 路由配置项，对应 RouteDefinition 数组
       routes:
-        # VIDEO - ONVIF 分布式扫描（Flask 挂载 /video/onvif-scan；StripPrefix 去掉首段 admin-api 后为 /video/onvif-scan/**）
-        - id: video-onvif-scan-admin-api
-          uri: lb://video-server
-          order: 0
-          predicates:
-            - Path=/admin-api/video/onvif-scan/**
-          filters:
-            - StripPrefix=1
-            - RewritePath=/admin-api/model/v3/api-docs, /v3/api-docs # 与其它 VIDEO 路由保持一致（Swagger 聚合若启用）
-        # VIDEO模块（摄像头、告警、算法任务、推流及上述 onvif-scan 之外的 /admin-api/video/**）
+        # VIDEO模块（摄像头、告警、算法任务、推流等 /admin-api/video/**）
         - id: video-admin-api
           uri: lb://video-server
-          order: 1
+          order: 0
           predicates: # 断言，作为路由的匹配条件，对应 RouteDefinition 数组
             - Path=/admin-api/video/**
           filters:

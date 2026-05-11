@@ -20,7 +20,7 @@ from healthcheck import HealthCheck, EnvironmentDump
 from nacos import NacosClient
 from sqlalchemy import text
 
-from app.blueprints import camera, alert, snap, playback, record, algorithm_task, stream_forward, face, onvif_scan
+from app.blueprints import camera, alert, snap, playback, record, algorithm_task, stream_forward, face
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -511,14 +511,6 @@ def create_app():
         import traceback
         traceback.print_exc()
 
-    try:
-        app.register_blueprint(onvif_scan.onvif_scan_bp, url_prefix='/video/onvif-scan')
-        print(f"✅ ONVIF Scan Blueprint 注册成功")
-    except Exception as e:
-        print(f"❌ ONVIF Scan Blueprint 注册失败: {str(e)}")
-        import traceback
-        traceback.print_exc()
-    
     try:
         from app.blueprints import device_detection_region
         app.register_blueprint(device_detection_region.device_detection_region_bp, url_prefix='/video/device-detection')

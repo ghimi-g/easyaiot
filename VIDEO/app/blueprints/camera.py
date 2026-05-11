@@ -546,11 +546,7 @@ def register_device():
 
 @camera_bp.route('/register/device/onvif', methods=['POST'])
 def register_device_by_onvif():
-    """通过 ONVIF 连接并注册单机设备（调用 ``register_camera_by_onvif``）。
-
-    与批量扫描使用的 ``register_camera_by_onvif_with_credentials``、黑名单及任务表分离，
-    不受 ``onvif_scan_service.is_ip_blacklisted`` 等批量策略影响。
-    """
+    """通过 ONVIF 连接并注册单机设备（调用 ``register_camera_by_onvif``）。"""
     try:
         data = request.get_json()
         if not data:
@@ -1091,14 +1087,10 @@ def capture_snapshot(device_id):
         return jsonify({'code': 500, 'msg': f'抓拍失败: {str(e)}'}), 500
 
 
-# ------------------------- 单机实时 ONVIF 发现（与 /video/onvif-scan 批量扫描完全独立）-------------------------
+# ------------------------- 单机实时 ONVIF 发现 -------------------------
 @camera_bp.route('/discovery', methods=['GET'])
 def discover_devices():
-    """发现网络中的 ONVIF 设备（WS-Discovery + camera_service._discovery_cameras）。
-
-    仅供摄像头管理页「单机局域网扫描」使用；不读写 OnvifScanTask、密码库与黑名单，
-    与 ``app.blueprints.onvif_scan`` / ``onvif_scan_service`` 批量扫描逻辑无任何耦合。
-    """
+    """发现网络中的 ONVIF 设备（WS-Discovery + camera_service._discovery_cameras）。供摄像头管理页局域网扫描使用。"""
     try:
         devices = search_camera()
         return jsonify({
