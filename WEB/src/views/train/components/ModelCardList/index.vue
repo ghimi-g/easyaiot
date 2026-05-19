@@ -31,7 +31,6 @@
                       @error="onImageError"
                     />
                   </div>
-                  <span v-if="isHotModel(item)" class="model-card-hot">热门</span>
                   <div
                     v-show="hoverId === item.id"
                     class="model-card-overlay"
@@ -184,13 +183,6 @@ function onImageError(e: Event) {
   if (img && img.src !== DEFAULT_MODEL_IMAGE) {
     img.src = DEFAULT_MODEL_IMAGE;
   }
-}
-
-function isHotModel(item: any): boolean {
-  if (!item.created_at) return false;
-  const created = new Date(item.created_at).getTime();
-  const days = (Date.now() - created) / (1000 * 60 * 60 * 24);
-  return days <= 14;
 }
 
 function getFormatText(item: any): string {
@@ -370,19 +362,6 @@ function handleDownload(record: object) {
   object-fit: contain;
   object-position: center;
   display: block;
-}
-
-.model-card-hot {
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 2;
-  padding: 4px 10px;
-  background: #f5222d;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.4;
 }
 
 .model-card-overlay {
