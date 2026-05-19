@@ -14,24 +14,6 @@
         </a-button>
         <PopConfirmButton
           placement="topRight"
-          @confirm="handleSetModel"
-          type="default"
-          :title="`是否确认设置自动化标注模型服务？`"
-          preIcon="ant-design:setting-outlined"
-        >
-          设置自动化标注模型服务
-        </PopConfirmButton>
-        <PopConfirmButton
-          placement="topRight"
-          @confirm="handleAutoLabel"
-          type="default"
-          :title="`是否确认执行一键自动化标注？`"
-          preIcon="ant-design:robot-outlined"
-        >
-          一键自动化标注
-        </PopConfirmButton>
-        <PopConfirmButton
-          placement="topRight"
           @confirm="handleSplitDataset"
           type="default"
           :title="`是否确认按比例划分数据集用途？`"
@@ -139,24 +121,6 @@
           </a-button>
           <PopConfirmButton
             placement="topRight"
-            @confirm="handleSetModel"
-            type="default"
-            :title="`是否确认设置自动化标注模型服务？`"
-            preIcon="ant-design:setting-outlined"
-          >
-            设置自动化标注模型服务
-          </PopConfirmButton>
-          <PopConfirmButton
-            placement="topRight"
-            @confirm="handleAutoLabel"
-            type="default"
-            :title="`是否确认执行一键自动化标注？`"
-            preIcon="ant-design:robot-outlined"
-          >
-            一键自动化标注
-          </PopConfirmButton>
-          <PopConfirmButton
-            placement="topRight"
             @confirm="handleSplitDataset"
             type="default"
             :title="`是否确认按比例划分数据集用途？`"
@@ -201,13 +165,11 @@ import {Tag} from "ant-design-vue";
 import {useRoute} from "vue-router";
 import {useModal} from "@/components/Modal";
 import {
-  autoLabel,
   checkSyncCondition,
   deleteDatasetImage,
   deleteDatasetImages,
   getDatasetImagePage,
   resetDataset,
-  setAutoLabelModel,
   splitDataset,
   syncToMinio,
 } from "@/api/device/dataset";
@@ -366,31 +328,6 @@ function onSelectAll(selected, _, changeRows) {
     });
   }
   console.log(checkedKeys);
-}
-
-async function handleSetModel() {
-  try {
-    await setAutoLabelModel(route.params.id, {
-      modelServiceId: 'model-123'
-    });
-    createMessage.success('设置自动化标注模型成功');
-    handleSuccess(); // 刷新列表
-  } catch (error) {
-    console.error('设置自动化标注模型失败:', error);
-    createMessage.error('设置自动化标注模型失败');
-  }
-}
-
-// 一键自动化标注
-async function handleAutoLabel() {
-  try {
-    await autoLabel(route.params.id);
-    createMessage.success('自动化标注任务已启动');
-    handleSuccess(); // 刷新列表
-  } catch (error) {
-    console.error('执行自动化标注失败:', error);
-    createMessage.error('执行自动化标注失败');
-  }
 }
 
 // 按比例划分数据集用途
