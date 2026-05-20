@@ -2310,7 +2310,7 @@ prepare_zlmediakit_config() {
 apiDebug=1
 defaultSnap=./www/logo.png
 downloadRoot=./www;
-secret=035c73f7-bb6b-4889-a715-d9eb2d1925cc
+secret=AdJQu9CMnwZvCc139s8lF0F9dhk6sNXG
 snapRoot=./www/snap/
 
 [cluster]
