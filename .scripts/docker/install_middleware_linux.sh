@@ -2990,8 +2990,8 @@ prepare_dify_bundle() {
     local upstream_dir="${DIFY_DIR}/.upstream"
     rm -rf "$upstream_dir"
 
-    print_dify_info "从 GitHub 拉取 langgenius/dify:${DIFY_VERSION} ..."
-    if ! git clone --depth 1 --branch "${DIFY_VERSION}" https://github.com/langgenius/dify.git "$upstream_dir" 2>&1 | tee -a "$DIFY_LOG_FILE"; then
+    print_dify_info "从 Gitee 拉取 dify_ai/dify:${DIFY_VERSION} ..."
+    if ! git clone --depth 1 --branch "${DIFY_VERSION}" https://gitee.com/dify_ai/dify.git "$upstream_dir" 2>&1 | tee -a "$DIFY_LOG_FILE"; then
         print_dify_error "下载 Dify 部署文件失败"
         rm -rf "$upstream_dir"
         return 1
