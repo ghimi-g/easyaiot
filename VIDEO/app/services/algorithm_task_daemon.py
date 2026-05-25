@@ -15,6 +15,7 @@ import threading
 import time
 import signal
 from datetime import datetime
+from dotenv import load_dotenv
 
 # 不再需要导入数据库模型，所有信息都通过参数传入
 
@@ -416,12 +417,30 @@ class AlgorithmTaskDaemon:
         
         # 准备环境变量（使用传入的参数）
         env = os.environ.copy()
+        # 子进程 cwd 为 services/*_algorithm_service，需显式加载 VIDEO/.env（含 GATEWAY_URL / GB28181_SERVICE_URL）
+        video_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        env_path = os.path.join(video_root, '.env')
+        if os.path.isfile(env_path):
+            load_dotenv(env_path, override=False)
+        for key in (
+            'DATABASE_URL', 'GATEWAY_URL', 'GB28181_SERVICE_URL', 'JWT_TOKEN',
+            'GB28181_HTTP_READ_TIMEOUT', 'GB28181_PLAY_PROTOCOL', 'GB28181_HEVC_RTSP_FIRST',
+            'GB28181_OPENCV_RTMP_FALLBACK_RTSP', 'POD_IP', 'HOST_IP',
+        ):
+            val = os.getenv(key)
+            if val:
+                env[key] = val
         # 重要：设置 PYTHONUNBUFFERED，确保输出实时（与 AI 模块保持一致）
         env['PYTHONUNBUFFERED'] = '1'
         env['TASK_ID'] = str(self._task_id)
         # 确保关键环境变量被传递
         if 'DATABASE_URL' not in env:
             self._log('DATABASE_URL环境变量未设置，服务可能无法连接数据库', 'WARNING')
+        if not env.get('GATEWAY_URL') and not env.get('GB28181_SERVICE_URL'):
+            self._log(
+                'GATEWAY_URL / GB28181_SERVICE_URL 未配置，GB28181 虚拟源将仅尝试本机 48088 直连',
+                'WARNING',
+            )
         
         # 设置VIDEO服务API地址（用于心跳上报和告警hook）
         video_service_port = os.getenv('FLASK_RUN_PORT', '6000')
@@ -442,7 +461,13 @@ class AlgorithmTaskDaemon:
         # 设置日志路径
         env['LOG_PATH'] = self._log_path
         
-        self._log(f'环境变量已设置: TASK_ID={env["TASK_ID"]}, VIDEO_SERVICE_PORT={env["VIDEO_SERVICE_PORT"]}, KAFKA_BOOTSTRAP_SERVERS={env["KAFKA_BOOTSTRAP_SERVERS"]}', 'DEBUG')
+        self._log(
+            f'环境变量已设置: TASK_ID={env["TASK_ID"]}, VIDEO_SERVICE_PORT={env["VIDEO_SERVICE_PORT"]}, '
+            f'KAFKA_BOOTSTRAP_SERVERS={env["KAFKA_BOOTSTRAP_SERVERS"]}, '
+            f'GATEWAY_URL={env.get("GATEWAY_URL", "")}, '
+            f'GB28181_SERVICE_URL={env.get("GB28181_SERVICE_URL", "")}',
+            'DEBUG',
+        )
         
         return cmds, deploy_service_dir, env
 

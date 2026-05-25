@@ -5,7 +5,11 @@ from urllib.parse import urlparse
 
 import requests
 
+from app.utils.ip_utils import resolve_ipv4_for_stream_urls
+
 _logger = logging.getLogger(__name__)
+
+_GB28181_API_PORT = 48088
 
 
 GB28181_SOURCE_PREFIX = 'gb28181://'
@@ -27,19 +31,72 @@ def parse_gb28181_source(source: Optional[str]) -> Optional[Tuple[str, str]]:
     return device_id, channel_id
 
 
+def _gb28181_http_timeout(default: int = 60) -> int:
+    """点播 HTTP 读超时（秒）。WVP play 为 DeferredResult，默认 play-timeout 可达 180s。"""
+    raw = (os.getenv('GB28181_HTTP_READ_TIMEOUT') or '').strip()
+    if not raw:
+        return default
+    try:
+        return max(5, int(raw))
+    except ValueError:
+        return default
+
+
+def _host_ip_for_gb28181_api() -> str:
+    """与 camera_service / iot-gb28181 MediaConfig 一致：优先 POD_IP、HOST_IP，再探测宿主机内网 IP。"""
+    for key in ('POD_IP', 'HOST_IP'):
+        ip = (os.getenv(key) or '').strip()
+        if ip and ip != '127.0.0.1':
+            return ip
+    detected = resolve_ipv4_for_stream_urls()
+    if detected:
+        return detected
+    return '127.0.0.1'
+
+
+def _direct_gb28181_api_bases() -> List[str]:
+    """直连 WVP /api 的候选根地址（去重、保序）。"""
+    host = _host_ip_for_gb28181_api()
+    candidates = [
+        f'http://127.0.0.1:{_GB28181_API_PORT}/api',
+        f'http://localhost:{_GB28181_API_PORT}/api',
+    ]
+    if host not in ('127.0.0.1', 'localhost'):
+        candidates.append(f'http://{host}:{_GB28181_API_PORT}/api')
+    seen = set()
+    out: List[str] = []
+    for base in candidates:
+        if base not in seen:
+            seen.add(base)
+            out.append(base)
+    return out
+
+
 def _candidate_bases() -> Iterable[str]:
+    seen: set[str] = set()
+    ordered: List[str] = []
+
+    def _add(base: str) -> None:
+        b = (base or '').strip().rstrip('/')
+        if b and b not in seen:
+            seen.add(b)
+            ordered.append(b)
+
     configured_base = (os.getenv('GB28181_SERVICE_URL') or '').strip().rstrip('/')
     if configured_base:
-        yield configured_base
+        _add(configured_base)
 
     gateway_url = (os.getenv('GATEWAY_URL') or '').strip().rstrip('/')
     if gateway_url:
         if gateway_url.endswith('/admin-api'):
-            yield f'{gateway_url}/gb28181'
+            _add(f'{gateway_url}/gb28181')
         else:
-            yield f'{gateway_url}/admin-api/gb28181'
+            _add(f'{gateway_url}/admin-api/gb28181')
 
-    yield 'http://localhost:48088/api'
+    for base in _direct_gb28181_api_bases():
+        _add(base)
+
+    return ordered
 
 
 def _build_play_url(base_url: str, device_id: str, channel_id: str) -> str:
@@ -163,12 +220,34 @@ def _format_gb28181_choice_log(chosen_url: str, meta: Dict[str, Any]) -> str:
     )
 
 
-def _extract_stream_url_and_meta(payload: dict) -> Tuple[Optional[str], Dict[str, Any]]:
+def _unwrap_wvp_play_body(payload: dict) -> Tuple[Optional[dict], Optional[str]]:
+    """解析 WVP 播放接口 JSON：外层 code=0 时，流地址可能在 data 或 data.data（StreamContent）。"""
+    if not isinstance(payload, dict):
+        return None, 'invalid payload'
     body = payload.get('data') if isinstance(payload.get('data'), dict) else payload
     if not isinstance(body, dict):
-        return None, {}
+        return None, 'empty play response'
+
+    inner_code = body.get('code')
+    if inner_code is not None and inner_code not in (0, 200):
+        return None, (body.get('msg') or f'WVP play code={inner_code}').strip()
+
+    nested = body.get('data')
+    if isinstance(nested, dict) and _all_play_urls_from_body(nested):
+        return nested, None
+    if _all_play_urls_from_body(body):
+        return body, None
+    return None, None
+
+
+def _extract_stream_url_and_meta(payload: dict) -> Tuple[Optional[str], Dict[str, Any]]:
+    body, err = _unwrap_wvp_play_body(payload if isinstance(payload, dict) else {})
+    if not isinstance(body, dict):
+        return None, {'wvp_error': err} if err else {}
     candidates, meta = _gb28181_play_candidates(body)
     chosen = next((url for url in candidates if isinstance(url, str) and url.strip()), None)
+    if err:
+        meta['wvp_error'] = err
     return chosen, meta
 
 
@@ -203,7 +282,7 @@ def _all_play_urls_from_body(body: dict) -> List[str]:
 def _fetch_gb28181_play_body(
     source: Optional[str],
     *,
-    timeout: int = 15,
+    timeout: Optional[int] = None,
 ) -> Tuple[Optional[Tuple[str, str]], Optional[dict], List[str]]:
     """返回 (device_id, channel_id), play body, errors。"""
     parsed = parse_gb28181_source(source)
@@ -216,17 +295,18 @@ def _fetch_gb28181_play_body(
     if jwt_token:
         headers['X-Authorization'] = f'Bearer {jwt_token}'
 
+    http_timeout = timeout if timeout is not None else _gb28181_http_timeout()
     errors: List[str] = []
     for base_url in _candidate_bases():
         play_url = _build_play_url(base_url, device_id, channel_id)
         try:
-            response = requests.get(play_url, headers=headers, timeout=timeout)
+            response = requests.get(play_url, headers=headers, timeout=http_timeout)
             response.raise_for_status()
             payload = response.json()
-            body = payload.get('data') if isinstance(payload.get('data'), dict) else payload
-            if isinstance(body, dict) and _all_play_urls_from_body(body):
+            body, wvp_err = _unwrap_wvp_play_body(payload if isinstance(payload, dict) else {})
+            if isinstance(body, dict):
                 return parsed, body, errors
-            errors.append(f'{base_url}: 未返回可播放流地址')
+            errors.append(f'{base_url}: {wvp_err or "未返回可播放流地址"}')
         except Exception as exc:
             errors.append(f'{base_url}: {exc}')
     return parsed, None, errors
@@ -237,7 +317,7 @@ def resolve_gb28181_alternate_pull_url(
     current_url: str,
     *,
     prefer_schemes: Tuple[str, ...] = ('rtsp', 'rtsps'),
-    timeout: int = 15,
+    timeout: Optional[int] = None,
     logger=None,
 ) -> Optional[str]:
     """
@@ -291,7 +371,7 @@ def resolve_gb28181_alternate_pull_url(
 def resolve_gb28181_source(
     source: Optional[str],
     *,
-    timeout: int = 15,
+    timeout: Optional[int] = None,
     logger=None,
 ) -> Optional[str]:
     parsed = parse_gb28181_source(source)
@@ -304,11 +384,12 @@ def resolve_gb28181_source(
     if jwt_token:
         headers['X-Authorization'] = f'Bearer {jwt_token}'
 
+    http_timeout = timeout if timeout is not None else _gb28181_http_timeout()
     errors = []
     for base_url in _candidate_bases():
         play_url = _build_play_url(base_url, device_id, channel_id)
         try:
-            response = requests.get(play_url, headers=headers, timeout=timeout)
+            response = requests.get(play_url, headers=headers, timeout=http_timeout)
             response.raise_for_status()
             payload = response.json()
             stream_url, meta = _extract_stream_url_and_meta(payload if isinstance(payload, dict) else {})
@@ -319,7 +400,8 @@ def resolve_gb28181_source(
                     f'GB28181源解析成功: {device_id}/{channel_id} -> {stream_url} | {detail} (via {base_url})'
                 )
                 return stream_url
-            errors.append(f'{base_url}: 未返回可播放流地址')
+            wvp_err = meta.get('wvp_error') if isinstance(meta, dict) else None
+            errors.append(f'{base_url}: {wvp_err or "未返回可播放流地址"}')
         except Exception as exc:
             errors.append(f'{base_url}: {exc}')
 

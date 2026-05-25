@@ -216,8 +216,12 @@ def get_flask_app():
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app', 'utils'))
 from tracker import SimpleTracker
 
-# 加载环境变量
-load_dotenv()
+# 加载 VIDEO 根目录 .env（守护进程 cwd 为 services/snapshot_algorithm_service）
+_video_env = os.path.join(video_root, '.env')
+if os.path.isfile(_video_env):
+    load_dotenv(_video_env, override=False)
+else:
+    load_dotenv()
 
 # OpenCV FFmpeg 解码参数（用于降低延迟并尽量忽略/丢弃损坏包）
 # 说明：当上游流发生抖动/重连/丢包时，FFmpeg 解码常出现 "error while decoding MB..."；
