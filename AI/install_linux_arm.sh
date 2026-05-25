@@ -34,9 +34,11 @@ cd "$SCRIPT_DIR"
 # ARM架构基础镜像
 ARM_BASE_IMAGE="pytorch/manylinuxaarch64-builder:cuda12.9"
 DOCKER_PLATFORM="linux/arm64"
-OFFLINE_CACHE_DIR="${SCRIPT_DIR}/.offline-cache"
-OFFLINE_DOCKER_CACHE_DIR="${OFFLINE_CACHE_DIR}/docker"
-OFFLINE_PIP_CACHE_DIR="${OFFLINE_CACHE_DIR}/pip"
+EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=../.scripts/docker/init-build-cache-dirs.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/init-build-cache-dirs.sh"
+BUILD_CACHE_DIR="${SCRIPT_DIR}/.build-cache"
+DOCKER_IMAGES_DIR="${BUILD_CACHE_DIR}/docker-images"
 
 # 打印带颜色的消息
 print_info() {
@@ -56,36 +58,28 @@ print_error() {
 }
 
 init_build_cache_dirs() {
-    mkdir -p "$OFFLINE_DOCKER_CACHE_DIR" "$OFFLINE_PIP_CACHE_DIR"
-    print_info "pip 离线缓存目录: $OFFLINE_PIP_CACHE_DIR"
+    init_project_build_cache_dirs "$SCRIPT_DIR"
 }
 
 prepare_cached_resources() {
-    mkdir -p "$OFFLINE_DOCKER_CACHE_DIR" "$OFFLINE_PIP_CACHE_DIR"
+    init_project_build_cache_dirs "$SCRIPT_DIR"
     local cache_script="${SCRIPT_DIR}/cache_resources_arm.sh"
+    local wheels="${SCRIPT_DIR}/.build-cache/pip-wheels"
 
-    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
-    if find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
-        print_success "检测到本地 pip 资源缓存目录: $OFFLINE_PIP_CACHE_DIR"
-    elif [ "${AUTO_CACHE_PIP:-1}" = "1" ]; then
-        if [ ! -f "$cache_script" ]; then
-            print_warning "未找到预缓存脚本: $cache_script，构建时将从网络下载"
-            return 0
-        fi
-        print_warning "未检测到本地 pip 资源缓存，自动执行 cache_resources_arm.sh 预下载..."
+    if find "$wheels" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) 2>/dev/null | grep -q .; then
+        print_success "检测到 pip-wheels: $wheels"
+        return 0
+    fi
+    if [ "${AUTO_CACHE_PIP:-1}" = "1" ] && [ -f "$cache_script" ]; then
+        print_warning "未检测到 pip-wheels，自动执行 cache_resources_arm.sh..."
         if [ -x "$cache_script" ]; then
             "$cache_script"
         else
             /bin/bash "$cache_script"
         fi
-        if find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
-            print_success "pip 离线缓存准备完成"
-        else
-            print_warning "预缓存执行完成但未检测到离线包，构建时将回退网络下载"
-        fi
     else
-        print_info "未检测到本地 pip 资源缓存，构建时将从网络下载"
-        print_info "如需提前缓存，请手动执行: ./cache_resources_arm.sh"
+        print_info "未检测到 pip-wheels，构建时将使用 pip-cache 在线安装"
+        print_info "可手动执行: ./cache_resources_arm.sh"
     fi
 }
 
@@ -111,16 +105,16 @@ build_with_cache() {
     local attempt=1
 
     init_build_cache_dirs
-    mkdir -p .offline-cache/pip
+    enable_docker_buildkit
     optimize_dockerfile_pip_cache Dockerfile
     optimize_dockerfile_pip_cache Dockerfile.arm
 
     cache_opts="--build-arg BASE_IMAGE=${ARM_BASE_IMAGE} --build-arg OFFLINE_MODE=${OFFLINE_MODE:-0}"
-    print_info "使用 docker build（ARM 离线 pip 缓存加速，BUILDKIT=0）..."
+    print_info "docker build（ARM，.build-cache bind mount）..."
     while [ $attempt -le $max_retries ]; do
         print_info "执行构建（第 ${attempt}/${max_retries} 次）..."
         set +e
-        DOCKER_BUILDKIT=0 docker build \
+        docker build \
             --target runtime \
             --platform "$DOCKER_PLATFORM" \
             -t ai-service:latest \

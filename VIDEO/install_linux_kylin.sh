@@ -33,8 +33,9 @@ NC='\033[0m' # No Color
 # 脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-OFFLINE_CACHE_DIR="${SCRIPT_DIR}/.offline-cache"
-OFFLINE_PIP_CACHE_DIR="${OFFLINE_CACHE_DIR}/pip"
+EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=../.scripts/docker/init-build-cache-dirs.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/init-build-cache-dirs.sh"
 
 # ARM架构基础镜像（针对麒麟系统）
 # 使用 ARM 版本的 PyTorch 镜像
@@ -58,31 +59,20 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-init_build_cache_dirs() {
-    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
-    print_info "pip 离线缓存目录: $OFFLINE_PIP_CACHE_DIR"
-}
-
 prepare_cached_resources() {
-    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
+    init_project_build_cache_dirs "$SCRIPT_DIR"
+    local wheels="${SCRIPT_DIR}/.build-cache/pip-wheels"
     local cache_script="${SCRIPT_DIR}/cache_resources_arm.sh"
 
-    if find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
-        print_success "检测到本地 pip 离线缓存: $OFFLINE_PIP_CACHE_DIR"
+    if find "$wheels" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) 2>/dev/null | grep -q .; then
+        print_success "检测到 pip-wheels: $wheels"
         return 0
     fi
-
-    if [ "${AUTO_CACHE_PIP:-1}" != "1" ]; then
-        print_info "未检测到 pip 离线包，构建时将从网络下载"
+    if [ "${AUTO_CACHE_PIP:-1}" != "1" ] || [ ! -f "$cache_script" ]; then
+        print_info "构建时将使用 pip-cache 在线安装（清华源）"
         return 0
     fi
-
-    if [ ! -f "$cache_script" ]; then
-        print_warning "未找到 $cache_script"
-        return 0
-    fi
-
-    print_warning "未检测到 pip 离线包，自动执行 cache_resources_arm.sh..."
+    print_warning "自动执行 cache_resources_arm.sh 预下载 wheel..."
     if [ -x "$cache_script" ]; then
         ARM_BASE_IMAGE="${ARM_BASE_IMAGE:-pytorch/manylinuxaarch64-builder:cuda12.9}" "$cache_script" || true
     else
@@ -95,12 +85,12 @@ build_with_cache() {
     local build_log="/tmp/docker_build_kylin_$$.log"
     local build_status=0
 
-    init_build_cache_dirs
-    mkdir -p .offline-cache/pip
+    init_project_build_cache_dirs "$SCRIPT_DIR"
+    enable_docker_buildkit
 
-    print_info "使用 docker build（麒麟 ARM，离线 pip 缓存，BUILDKIT=0）..."
+    print_info "docker build（麒麟 ARM，.build-cache bind mount）..."
     set +e
-    DOCKER_BUILDKIT=0 docker build \
+    docker build \
         --target runtime \
         --platform "$DOCKER_PLATFORM" \
         -t video-service:latest \

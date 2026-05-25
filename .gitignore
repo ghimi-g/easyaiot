@@ -83,8 +83,9 @@ hs_err_pid*
 # auto-labeling 标注数据目录（运行时用户数据）
 /AI/services/auto-labeling/static/annotations/
 
-# 离线 pip 构建资源（由 cache_resources*.sh / install_linux*.sh 生成）
-**/.offline-cache/
+# Docker 构建依赖宿主机缓存（pnpm / Maven / pip，由 install_linux*.sh 创建）
+**/.build-cache/*
+!**/.build-cache/README.md
 
 # CMake 构建目录
 TASK/build-linux/

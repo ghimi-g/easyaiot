@@ -1,3 +1,6 @@
+# 构建期依赖缓存（运行时无需挂载）：
+#   .build-cache/m2/repository — Maven dependency:go-offline / package 时 bind mount
+#   默认属主 UID/GID=1000
 services:
   iot-gateway:
     image: iot-gateway:latest

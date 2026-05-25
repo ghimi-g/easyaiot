@@ -15,6 +15,9 @@ NC='\033[0m' # No Color
 
 # 脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=../.scripts/docker/init-build-cache-dirs.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/init-build-cache-dirs.sh"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 
 # 检查docker-compose是否存在
@@ -120,12 +123,12 @@ build_images() {
     check_docker_daemon
     
     cd "$SCRIPT_DIR"
+    init_project_build_cache_dirs "$SCRIPT_DIR"
+    enable_docker_buildkit
     
-    # 构建所有运行时镜像
-    print_info "构建所有运行时镜像..."
+    print_info "构建所有运行时镜像（Maven 仓库: .build-cache/m2/repository）..."
     local exit_code
     
-    # 使用 docker build 命令构建所有服务镜像
     print_info "使用 docker build 构建所有服务镜像..."
     docker build --target iot-gateway -t iot-gateway:latest . && \
     docker build --target iot-system -t iot-module-system-biz:latest . && \
@@ -158,12 +161,12 @@ build_images_force() {
     check_docker_daemon
     
     cd "$SCRIPT_DIR"
+    init_project_build_cache_dirs "$SCRIPT_DIR"
+    enable_docker_buildkit
     
-    # 构建所有运行时镜像
-    print_info "强制重新构建所有运行时镜像（根据代码重新构建）..."
+    print_info "强制重新构建所有运行时镜像（Maven: .build-cache/m2/repository）..."
     local exit_code
     
-    # 使用 docker build 命令构建所有服务镜像
     print_info "使用 docker build 构建所有服务镜像..."
     docker build --target iot-gateway -t iot-gateway:latest . && \
     docker build --target iot-system -t iot-module-system-biz:latest . && \
@@ -457,9 +460,10 @@ update_services() {
     check_docker_daemon
     
     cd "$SCRIPT_DIR"
+    init_project_build_cache_dirs "$SCRIPT_DIR"
+    enable_docker_buildkit
     
-    # 重新构建运行时镜像
-    print_info "重新构建运行时镜像..."
+    print_info "重新构建运行时镜像（Maven: .build-cache/m2/repository）..."
     print_info "使用 docker build 构建所有服务镜像..."
     docker build --target iot-gateway -t iot-gateway:latest . && \
     docker build --target iot-system -t iot-module-system-biz:latest . && \

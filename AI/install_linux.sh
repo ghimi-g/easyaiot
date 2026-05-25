@@ -31,12 +31,11 @@ NC='\033[0m' # No Color
 # 脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-OFFLINE_CACHE_DIR="${SCRIPT_DIR}/.offline-cache"
-OFFLINE_PIP_CACHE_DIR="${OFFLINE_CACHE_DIR}/pip"
+EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=../.scripts/docker/init-build-cache-dirs.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/init-build-cache-dirs.sh"
 
-# 标注平台目录
 AUTO_LABELING_DIR="$SCRIPT_DIR/services/auto-labeling"
-AL_OFFLINE_PIP_CACHE_DIR="${AUTO_LABELING_DIR}/.offline-cache/pip"
 
 # 打印带颜色的消息
 print_info() {
@@ -55,55 +54,29 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-init_build_cache_dirs() {
-    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
-    print_info "pip 离线缓存目录: $OFFLINE_PIP_CACHE_DIR"
-}
-
 prepare_cached_resources() {
-    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
+    init_project_build_cache_dirs "$SCRIPT_DIR"
+    local wheels="${SCRIPT_DIR}/.build-cache/pip-wheels"
     local cache_script="${SCRIPT_DIR}/cache_resources.sh"
-
-    if find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
-        print_success "检测到本地 pip 离线缓存: $OFFLINE_PIP_CACHE_DIR"
+    if find "$wheels" -maxdepth 1 -type f 2>/dev/null | grep -q .; then
+        print_success "检测到 pip-wheels: $wheels"
         return 0
     fi
-
-    if [ "${AUTO_CACHE_PIP:-1}" != "1" ]; then
-        print_info "未检测到 pip 离线包，构建时将从网络下载"
-        return 0
-    fi
-
-    if [ ! -f "$cache_script" ]; then
-        print_warning "未找到 $cache_script"
-        return 0
-    fi
-
-    print_warning "未检测到 pip 离线包，自动执行 cache_resources.sh..."
-    if [ -x "$cache_script" ]; then
-        BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" "$cache_script" || true
-    else
-        BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" /bin/bash "$cache_script" || true
+    if [ "${AUTO_CACHE_PIP:-1}" = "1" ] && [ -f "$cache_script" ]; then
+        BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" "$cache_script" 2>/dev/null || \
+            BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" /bin/bash "$cache_script" || true
     fi
 }
 
 prepare_auto_labeling_cached_resources() {
-    mkdir -p "$AL_OFFLINE_PIP_CACHE_DIR"
+    init_project_build_cache_dirs "$AUTO_LABELING_DIR"
+    local wheels="${AUTO_LABELING_DIR}/.build-cache/pip-wheels"
     local cache_script="${AUTO_LABELING_DIR}/cache_resources.sh"
-
-    if find "$AL_OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
+    if find "$wheels" -maxdepth 1 -type f 2>/dev/null | grep -q .; then
         return 0
     fi
-
-    if [ "${AUTO_CACHE_PIP:-1}" != "1" ] || [ ! -f "$cache_script" ]; then
-        return 0
-    fi
-
-    print_info "标注平台：自动执行 cache_resources.sh..."
-    if [ -x "$cache_script" ]; then
-        "$cache_script" || true
-    else
-        /bin/bash "$cache_script" || true
+    if [ "${AUTO_CACHE_PIP:-1}" = "1" ] && [ -f "$cache_script" ]; then
+        "$cache_script" 2>/dev/null || /bin/bash "$cache_script" || true
     fi
 }
 
@@ -111,25 +84,23 @@ build_with_cache() {
     local no_cache_flag="$1"
     local build_log="/tmp/docker_build_$$.log"
     local build_status=0
-    local cache_opts="--build-arg OFFLINE_MODE=${OFFLINE_MODE:-0}"
     local platform_opts=""
 
-    init_build_cache_dirs
-    mkdir -p .offline-cache/pip
-
+    init_project_build_cache_dirs "$SCRIPT_DIR"
+    enable_docker_buildkit
     if [ -n "${DOCKER_PLATFORM:-}" ]; then
         platform_opts="--platform $DOCKER_PLATFORM"
     fi
 
-    print_info "使用 docker build（离线 pip 缓存，BUILDKIT=0）..."
+    print_info "docker build（.build-cache pip-cache/pip-wheels bind mount）..."
     set +e
-    DOCKER_BUILDKIT=0 docker build \
+    docker build \
         --build-arg BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" \
         --target runtime \
         $platform_opts \
         -t ai-service:latest \
         --pull=false \
-        $cache_opts \
+        --build-arg OFFLINE_MODE=${OFFLINE_MODE:-0} \
         $no_cache_flag \
         . 2>&1 | tee "$build_log"
     build_status=${PIPESTATUS[0]}
@@ -141,7 +112,6 @@ build_with_cache() {
         rm -f "$build_log"
         return 1
     fi
-
     rm -f "$build_log"
     return 0
 }
@@ -151,12 +121,13 @@ build_auto_labeling_with_cache() {
     local build_log="/tmp/docker_build_auto_labeling_$$.log"
     local build_status=0
 
-    mkdir -p "${AUTO_LABELING_DIR}/.offline-cache/pip"
+    init_project_build_cache_dirs "$AUTO_LABELING_DIR"
+    enable_docker_buildkit
     prepare_auto_labeling_cached_resources
 
-    print_info "构建标注平台镜像（离线 pip 缓存，BUILDKIT=0）..."
+    print_info "构建标注平台（.build-cache bind mount）..."
     set +e
-    DOCKER_BUILDKIT=0 docker build \
+    docker build \
         -t auto-labeling:latest \
         --pull=false \
         --build-arg OFFLINE_MODE=${OFFLINE_MODE:-0} \
@@ -171,7 +142,6 @@ build_auto_labeling_with_cache() {
         rm -f "$build_log"
         return 1
     fi
-
     rm -f "$build_log"
     return 0
 }

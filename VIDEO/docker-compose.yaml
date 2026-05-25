@@ -1,3 +1,6 @@
+# 构建期依赖缓存（运行时无需挂载）：
+#   .build-cache/pip-cache、pip-wheels — docker build 时 bind mount（见 Dockerfile、install_linux*.sh）
+#   目录由 install 脚本预创建，默认属主 UID/GID=1000（BUILD_CACHE_UID 可覆盖）
 services:
   video-service:
     image: video-service:latest

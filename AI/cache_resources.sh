@@ -22,11 +22,11 @@ check_command() { command -v "$1" >/dev/null 2>&1; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-OFFLINE_CACHE_DIR="${SCRIPT_DIR}/.offline-cache"
-OFFLINE_PIP_CACHE_DIR="${OFFLINE_CACHE_DIR}/pip"
+BUILD_CACHE_DIR="${SCRIPT_DIR}/.build-cache"
+PIP_WHEELS_DIR="${BUILD_CACHE_DIR}/pip-wheels"
 BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}"
 
-mkdir -p "$OFFLINE_PIP_CACHE_DIR"
+mkdir -p "$PIP_WHEELS_DIR"
 
 if ! check_command docker; then
     print_error "未检测到 docker，请先安装 Docker"
@@ -34,7 +34,7 @@ if ! check_command docker; then
 fi
 
 print_info "清理旧的 pip 离线包..."
-find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
+find "$PIP_WHEELS_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
 
 print_info "使用基础镜像 ${BASE_IMAGE} 下载与容器一致的 pip 离线包..."
 set +e
@@ -42,7 +42,7 @@ docker run --rm \
     -v "$SCRIPT_DIR:/work" \
     -w /work \
     "$BASE_IMAGE" \
-    /bin/bash -lc 'pip install --upgrade pip -q -i https://pypi.tuna.tsinghua.edu.cn/simple && pip download -r requirements.txt -d .offline-cache/pip --timeout 120 --retries 3 -i https://pypi.tuna.tsinghua.edu.cn/simple'
+    /bin/bash -lc 'pip install --upgrade pip -q -i https://pypi.tuna.tsinghua.edu.cn/simple && pip download -r requirements.txt -d .build-cache/pip-wheels --timeout 120 --retries 3 -i https://pypi.tuna.tsinghua.edu.cn/simple'
 status=$?
 set -e
 
@@ -52,9 +52,9 @@ if [ $status -ne 0 ]; then
         exit 1
     fi
     print_warning "容器内下载失败，使用本机 python3 回退..."
-    python3 -m pip download -r requirements.txt -d "$OFFLINE_PIP_CACHE_DIR" --timeout 120 --retries 3 \
+    python3 -m pip download -r requirements.txt -d "$PIP_WHEELS_DIR" --timeout 120 --retries 3 \
         -i https://pypi.tuna.tsinghua.edu.cn/simple
 fi
 
-du -sh "$OFFLINE_CACHE_DIR" 2>/dev/null || true
-print_success "pip 离线资源已保存到 $OFFLINE_PIP_CACHE_DIR"
+du -sh "$BUILD_CACHE_DIR" 2>/dev/null || true
+print_success "pip wheel 已保存到 $PIP_WHEELS_DIR"

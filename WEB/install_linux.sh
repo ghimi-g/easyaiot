@@ -31,6 +31,9 @@ NC='\033[0m' # No Color
 # 脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=../.scripts/docker/init-build-cache-dirs.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/init-build-cache-dirs.sh"
 
 # 打印带颜色的消息
 print_info() {
@@ -85,9 +88,10 @@ check_docker_compose() {
     fi
 }
 
-# 执行 docker build，并把完整构建输出写入宿主机 WEB/docker-build-logs/（不依赖 BuildKit）
-# 失败时 Dockerfile 内 cat 的 pnpm 构建日志会出现在该输出中；pnpm-build.log 为追加写入，带时间分隔便于翻历史
+# 执行 docker build（BuildKit + 宿主机 .build-cache/pnpm-store bind mount）
 docker_build_image() {
+    init_project_build_cache_dirs "$SCRIPT_DIR"
+    enable_docker_buildkit
     mkdir -p "${SCRIPT_DIR}/docker-build-logs"
     local ts log_new pnpm_log ec
     ts=$(date +%Y%m%d-%H%M%S)

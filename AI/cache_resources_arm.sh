@@ -1,10 +1,9 @@
 #!/bin/bash
 
 # ============================================
-# AI 离线资源预下载脚本（ARM架构）
-# 功能：
-# 1) 拉取并保存构建所需 Docker 镜像到本地目录
-# 2) 下载 requirements.txt 的 pip 依赖包到本地目录
+# AI 构建资源预下载脚本（ARM架构）
+# 1) 可选保存 Docker 镜像到 .build-cache/docker-images
+# 2) 下载 pip wheel 到 .build-cache/pip-wheels
 # ============================================
 
 set -e
@@ -42,14 +41,18 @@ image_to_tar_name() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-OFFLINE_CACHE_DIR="${SCRIPT_DIR}/.offline-cache"
-OFFLINE_DOCKER_CACHE_DIR="${OFFLINE_CACHE_DIR}/docker"
-OFFLINE_PIP_CACHE_DIR="${OFFLINE_CACHE_DIR}/pip"
-OFFLINE_ARM_REQUIREMENTS_FILE="${OFFLINE_CACHE_DIR}/requirements.arm.txt"
+EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=../.scripts/docker/init-build-cache-dirs.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/init-build-cache-dirs.sh"
+
+BUILD_CACHE_DIR="${SCRIPT_DIR}/.build-cache"
+DOCKER_IMAGES_DIR="${BUILD_CACHE_DIR}/docker-images"
+PIP_WHEELS_DIR="${BUILD_CACHE_DIR}/pip-wheels"
+ARM_REQUIREMENTS_FILE="${BUILD_CACHE_DIR}/requirements.arm.txt"
 
 ARM_BASE_IMAGE="${ARM_BASE_IMAGE:-pytorch/manylinuxaarch64-builder:cuda12.9}"
 
-mkdir -p "$OFFLINE_DOCKER_CACHE_DIR" "$OFFLINE_PIP_CACHE_DIR"
+init_project_build_cache_dirs "$SCRIPT_DIR"
 
 if ! check_command docker; then
     print_error "未检测到 docker，请先安装 Docker"
@@ -58,30 +61,30 @@ fi
 
 download_docker_image() {
     local image="$1"
-    local tar_file="${OFFLINE_DOCKER_CACHE_DIR}/$(image_to_tar_name "$image").tar"
+    local tar_file="${DOCKER_IMAGES_DIR}/$(image_to_tar_name "$image").tar"
 
     print_info "拉取镜像: $image"
     docker pull "$image"
     print_info "保存镜像到: $tar_file"
     docker save -o "$tar_file" "$image"
-    print_success "镜像离线包已保存: $image"
+    print_success "镜像已保存: $image"
 }
 
 if [ "${CACHE_DOCKER_IMAGE:-0}" = "1" ]; then
-    print_info "开始下载并保存 Docker 离线镜像..."
+    print_info "下载并保存 Docker 基础镜像..."
     download_docker_image "$ARM_BASE_IMAGE"
 else
-    print_info "默认跳过 Docker 离线镜像缓存（如需启用：CACHE_DOCKER_IMAGE=1 ./cache_resources_arm.sh）"
+    print_info "跳过 Docker 镜像缓存（启用: CACHE_DOCKER_IMAGE=1 ./cache_resources_arm.sh）"
 fi
 
 # ARM 构建前将 onnxruntime-gpu 替换为 onnxruntime，与 Dockerfile.arm 一致
-sed 's/onnxruntime-gpu>=/onnxruntime>=/g' requirements.txt > "$OFFLINE_ARM_REQUIREMENTS_FILE"
+sed 's/onnxruntime-gpu>=/onnxruntime>=/g' requirements.txt > "$ARM_REQUIREMENTS_FILE"
 
 download_pip_packages() {
-    print_info "清理旧的 pip 离线包，避免不同 Python ABI 混用..."
-    find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
+    print_info "清理旧的 pip wheel，避免不同 Python ABI 混用..."
+    find "$PIP_WHEELS_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
 
-    print_info "使用 ARM 基础镜像下载与容器一致的 pip 离线包..."
+    print_info "使用 ARM 基础镜像下载与容器一致的 pip wheel..."
     set +e
     docker run --rm \
         -v "$SCRIPT_DIR:/work" \
@@ -101,40 +104,36 @@ else
 fi
 
 "$PIP_BIN" --version
-"$PIP_BIN" download -r .offline-cache/requirements.arm.txt -d .offline-cache/pip --timeout 120 --retries 3 -i https://pypi.tuna.tsinghua.edu.cn/simple
+"$PIP_BIN" download -r .build-cache/requirements.arm.txt -d .build-cache/pip-wheels --timeout 120 --retries 3 -i https://pypi.tuna.tsinghua.edu.cn/simple
 '
     local docker_download_status=$?
     set -e
 
     if [ $docker_download_status -eq 0 ]; then
-        print_success "pip 离线包下载完成（与目标容器 ABI 一致）"
+        print_success "pip wheel 下载完成（与目标容器 ABI 一致）"
         return 0
     fi
 
     if [ "${ALLOW_HOST_PIP_FALLBACK:-0}" != "1" ]; then
-        print_error "容器内下载 pip 离线包失败，已停止（默认禁用本机回退，避免生成 ABI 不匹配的离线包）"
-        print_info "如确需回退，可显式执行: ALLOW_HOST_PIP_FALLBACK=1 ./cache_resources_arm.sh"
+        print_error "容器内下载失败（默认禁用本机回退，避免 ABI 不匹配）"
+        print_info "如确需回退: ALLOW_HOST_PIP_FALLBACK=1 ./cache_resources_arm.sh"
         return 1
     fi
 
-    print_warning "容器内下载失败，已启用 ALLOW_HOST_PIP_FALLBACK=1，尝试使用本机 python3 回退下载..."
-    if ! check_command python3; then
-        print_error "未检测到 python3，且容器内下载失败，无法准备 pip 离线包"
-        return 1
-    fi
-    if ! python3 -m pip --version >/dev/null 2>&1; then
-        print_error "python3 未安装 pip，且容器内下载失败，无法准备 pip 离线包"
+    print_warning "容器内下载失败，使用本机 python3 回退..."
+    if ! check_command python3 || ! python3 -m pip --version >/dev/null 2>&1; then
+        print_error "本机 python3/pip 不可用"
         return 1
     fi
 
-    python3 -m pip download -r "$OFFLINE_ARM_REQUIREMENTS_FILE" -d "$OFFLINE_PIP_CACHE_DIR" --timeout 120 --retries 3
-    print_warning "已使用本机环境回退下载 pip 离线包，可能与目标容器 ABI 不一致（建议仅临时使用）"
+    python3 -m pip download -r "$ARM_REQUIREMENTS_FILE" -d "$PIP_WHEELS_DIR" --timeout 120 --retries 3
+    print_warning "已使用本机环境回退下载，可能与目标容器 ABI 不一致"
     return 0
 }
 
-print_info "开始下载 pip 依赖到本地目录: $OFFLINE_PIP_CACHE_DIR"
+print_info "开始下载 pip 依赖到: $PIP_WHEELS_DIR"
 download_pip_packages
 
-print_info "离线资源目录："
-du -sh "$OFFLINE_CACHE_DIR" 2>/dev/null || true
-print_success "离线资源准备完成，可在离线服务器上使用 install_linux_arm.sh 自动导入"
+print_info "构建缓存目录："
+du -sh "$BUILD_CACHE_DIR" 2>/dev/null || true
+print_success "预下载完成，可使用 install_linux_arm.sh 构建"

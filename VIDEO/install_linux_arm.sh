@@ -34,9 +34,11 @@ cd "$SCRIPT_DIR"
 # ARM架构基础镜像
 ARM_BASE_IMAGE="pytorch/manylinuxaarch64-builder:cuda12.9"
 DOCKER_PLATFORM="linux/arm64"
-OFFLINE_CACHE_DIR="${SCRIPT_DIR}/.offline-cache"
-OFFLINE_DOCKER_CACHE_DIR="${OFFLINE_CACHE_DIR}/docker"
-OFFLINE_PIP_CACHE_DIR="${OFFLINE_CACHE_DIR}/pip"
+EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=../.scripts/docker/init-build-cache-dirs.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/init-build-cache-dirs.sh"
+BUILD_CACHE_DIR="${SCRIPT_DIR}/.build-cache"
+DOCKER_IMAGES_DIR="${BUILD_CACHE_DIR}/docker-images"
 
 # 打印带颜色的消息
 print_info() {
@@ -56,8 +58,7 @@ print_error() {
 }
 
 init_build_cache_dirs() {
-    mkdir -p "$OFFLINE_DOCKER_CACHE_DIR" "$OFFLINE_PIP_CACHE_DIR"
-    print_info "pip 离线缓存目录: $OFFLINE_PIP_CACHE_DIR"
+    init_project_build_cache_dirs "$SCRIPT_DIR"
 }
 
 image_to_tar_name() {
@@ -99,26 +100,26 @@ try_import_cached_image() {
 }
 
 prepare_cached_resources() {
-    mkdir -p "$OFFLINE_DOCKER_CACHE_DIR" "$OFFLINE_PIP_CACHE_DIR"
+    init_project_build_cache_dirs "$SCRIPT_DIR"
 
-    local base_tar="${OFFLINE_DOCKER_CACHE_DIR}/$(image_to_tar_name "$ARM_BASE_IMAGE").tar"
+    local base_tar="${DOCKER_IMAGES_DIR}/$(image_to_tar_name "$ARM_BASE_IMAGE").tar"
     local cache_script="${SCRIPT_DIR}/cache_resources_arm.sh"
     local need_prefetch=0
 
     if ! is_image_available_offline "$ARM_BASE_IMAGE" "$base_tar"; then
         need_prefetch=1
     fi
-    if ! find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
+    if ! find "${SCRIPT_DIR}/.build-cache/pip-wheels" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
         need_prefetch=1
     fi
 
     local py_tag=""
     if grep -Eq '^torch([<>= ].*)?$' requirements.txt 2>/dev/null; then
         py_tag=$(docker run --rm "$ARM_BASE_IMAGE" /bin/bash -lc "if [ -x /opt/python/cp311-cp311/bin/python3.11 ]; then /opt/python/cp311-cp311/bin/python3.11 -c 'import sys; print(\"cp{}{}\".format(sys.version_info.major, sys.version_info.minor))'; elif [ -x /opt/python/cp310-cp310/bin/python3.10 ]; then /opt/python/cp310-cp310/bin/python3.10 -c 'import sys; print(\"cp{}{}\".format(sys.version_info.major, sys.version_info.minor))'; elif command -v python3 >/dev/null 2>&1; then python3 -c 'import sys; print(\"cp{}{}\".format(sys.version_info.major, sys.version_info.minor))'; else echo ''; fi" 2>/dev/null || echo "")
-        if [ -n "$py_tag" ] && find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f -name "torch-*.whl" | grep -q .; then
-            if ! find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f -name "torch-*-${py_tag}-*.whl" | grep -q .; then
+        if [ -n "$py_tag" ] && find "${SCRIPT_DIR}/.build-cache/pip-wheels" -maxdepth 1 -type f -name "torch-*.whl" | grep -q .; then
+            if ! find "${SCRIPT_DIR}/.build-cache/pip-wheels" -maxdepth 1 -type f -name "torch-*-${py_tag}-*.whl" | grep -q .; then
                 print_warning "检测到离线 pip 包 ABI 不匹配（目标: ${py_tag}），将自动清理并重新下载..."
-                rm -f "$OFFLINE_PIP_CACHE_DIR"/*
+                rm -f "${SCRIPT_DIR}/.build-cache/pip-wheels"/*
                 need_prefetch=1
             fi
         fi
@@ -141,11 +142,10 @@ prepare_cached_resources() {
     print_info "检查并导入本地离线镜像（如存在）..."
     try_import_cached_image "$ARM_BASE_IMAGE" "$base_tar" || true
 
-    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
-    if find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
-        print_success "检测到本地 pip 资源缓存目录: $OFFLINE_PIP_CACHE_DIR"
+    if find "${SCRIPT_DIR}/.build-cache/pip-wheels" -maxdepth 1 -type f 2>/dev/null | grep -q .; then
+        print_success "检测到 pip-wheels: ${SCRIPT_DIR}/.build-cache/pip-wheels"
     else
-        print_info "未检测到本地 pip 资源缓存，构建时将从网络下载"
+        print_info "未检测到 pip-wheels，构建时将使用 pip-cache 在线安装"
     fi
 }
 
@@ -171,16 +171,16 @@ build_with_cache() {
     local attempt=1
 
     init_build_cache_dirs
-    mkdir -p .offline-cache/pip
+    enable_docker_buildkit
     optimize_dockerfile_pip_cache Dockerfile
     optimize_dockerfile_pip_cache Dockerfile.arm
 
     cache_opts="--build-arg OFFLINE_MODE=${OFFLINE_MODE:-0}"
-    print_info "使用 docker build（ARM 离线 pip 缓存加速，BUILDKIT=0）..."
+    print_info "docker build（ARM，.build-cache bind mount）..."
     while [ $attempt -le $max_retries ]; do
         print_info "执行构建（第 ${attempt}/${max_retries} 次）..."
         set +e
-        DOCKER_BUILDKIT=0 docker build \
+        docker build \
             --target runtime \
             --platform "$DOCKER_PLATFORM" \
             -t video-service:latest \

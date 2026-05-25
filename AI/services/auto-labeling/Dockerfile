@@ -1,8 +1,10 @@
+# syntax=docker/dockerfile:1.4
 FROM python:3.10-slim
 
 ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
-    TZ=Asia/Shanghai
+    TZ=Asia/Shanghai \
+    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 WORKDIR /app
 
@@ -22,27 +24,25 @@ RUN set -ex && \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-COPY .offline-cache/pip /opt/offline-pip
+COPY .build-cache/pip-wheels /opt/offline-pip
 ARG OFFLINE_MODE=0
 
-RUN set -ex && \
+RUN --mount=type=bind,source=.build-cache/pip-cache,target=/root/.cache/pip \
+    set -ex && \
+    export PIP_CACHE_DIR=/root/.cache/pip && \
+    pip install --upgrade pip -i "${PIP_INDEX_URL}" && \
     if [ -n "$(find /opt/offline-pip -maxdepth 1 -type f 2>/dev/null)" ]; then \
-        echo "检测到本地离线 pip 资源，优先离线安装..." && \
-        pip install -r requirements.txt --no-index --find-links /opt/offline-pip; \
+        pip install --user -r requirements.txt --no-index --find-links /opt/offline-pip; \
     elif [ "$OFFLINE_MODE" = "1" ]; then \
-        echo "OFFLINE_MODE=1 且未检测到离线 pip 资源，请先执行 cache_resources.sh" && \
-        exit 1; \
+        echo "OFFLINE_MODE=1 且无 pip-wheels" && exit 1; \
     else \
-        echo "未检测到离线 pip 资源，使用在线源安装..." && \
-        pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
-        pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple; \
+        pip install --user -r requirements.txt -i "${PIP_INDEX_URL}"; \
     fi && \
     apt-get purge -y --auto-remove gcc g++ python3-dev && \
     rm -rf /var/lib/apt/lists/*
 
 COPY . .
 
-# 构建时校验前端静态资源（clone 后若缺少 static 会在此失败，便于排查）
 RUN test -f static/style.css && test -f static/script.js && test -f static/all.min.css
 
 EXPOSE 8000
