@@ -234,7 +234,7 @@ const loadModels = async () => {
   
   modelsLoading.value = true;
   try {
-    const response = await getModelPage({ page: 1, size: 100 });
+    const response = await getModelPage({ pageNo: 1, pageSize: 1000 });
     // 处理响应数据：可能是转换后的数组，也可能是包含 code/data 的对象
     let allModels: any[] = [];
     if (Array.isArray(response)) {

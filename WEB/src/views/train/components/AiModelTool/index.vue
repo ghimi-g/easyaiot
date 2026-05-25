@@ -1118,7 +1118,7 @@ const handleVideoUpload = (event: Event) => {
 const loadModels = async () => {
   state.loading = true;
   try {
-    const response = await getModelPage({ page: 1, size: 100 });
+    const response = await getModelPage({ pageNo: 1, pageSize: 1000 });
     if (response.code === 0) {
       state.models = response.data || [];
       if (state.models.length > 0 && !state.selectedModelId) {

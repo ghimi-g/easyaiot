@@ -189,7 +189,7 @@ const formState = reactive({
 // 加载项目列表
 const fetchProjects = async () => {
   try {
-    const response = await getModelPage();
+    const response = await getModelPage({ pageNo: 1, pageSize: 1000 });
     projects.value = response.data;
     if (projects.value.length > 0) {
       formState.projectId = projects.value[0].id;
