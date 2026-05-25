@@ -2241,13 +2241,52 @@ print("###JSON_END###")
         return jsonify({'error': f'批量AI标注失败: {str(e)}'}), 500
 
 
+def _resolve_yolo11_install_path(install_path='plugins/yolo11'):
+    if not os.path.isabs(install_path):
+        install_path = os.path.join(app.root_path, install_path)
+    return install_path
+
+
+def _yolo11_python(install_path):
+    if os.name == 'nt':
+        venv_python = os.path.join(install_path, 'venv', 'Scripts', 'python.exe')
+    else:
+        venv_python = os.path.join(install_path, 'venv', 'bin', 'python')
+    if os.path.isfile(venv_python):
+        return venv_python
+    return sys.executable
+
+
+def _yolo11_runtime_ready(install_path):
+    import subprocess
+    python_path = _yolo11_python(install_path)
+    try:
+        result = subprocess.run(
+            [python_path, '-c', 'import ultralytics'],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _ensure_yolo11_layout(install_path='plugins/yolo11'):
+    install_path = _resolve_yolo11_install_path(install_path)
+    os.makedirs(os.path.join(install_path, 'models'), exist_ok=True)
+    bundled = os.path.join(app.root_path, 'yolo11n.pt')
+    dest = os.path.join(install_path, 'models', 'yolo11n.pt')
+    if os.path.isfile(bundled) and not os.path.isfile(dest):
+        shutil.copy2(bundled, dest)
+    return install_path
+
+
 @app.route('/api/check-yolo11-install')
 def check_yolo11_install():
     """检查YOLO11安装状态"""
-    import os
-    # 检查YOLO11安装路径是否存在
-    yolo11_path = os.path.join(app.root_path, 'plugins', 'yolo11')
-    is_installed = os.path.exists(yolo11_path) and os.path.isdir(yolo11_path)
+    yolo11_path = _ensure_yolo11_layout()
+    is_installed = _yolo11_runtime_ready(yolo11_path)
     
     # 初始化安装信息
     install_info = {
@@ -2264,10 +2303,10 @@ def check_yolo11_install():
             try:
                 with open(install_info_path, 'r', encoding='utf-8') as f:
                     saved_info = json.load(f)
-                    # 更新安装信息
                     install_info.update(saved_info)
-            except Exception as e:
-                print(f"读取安装信息失败: {e}")
+                    install_info['is_installed'] = True
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+                app.logger.warning('读取 YOLO11 安装信息失败: %s', e)
     
     return jsonify(install_info)
 
@@ -2286,8 +2325,7 @@ def download_models():
     install_path = request.args.get('install_path', 'plugins/yolo11')
     
     # 确保安装路径是相对于项目根目录的
-    if not os.path.isabs(install_path):
-        install_path = os.path.join(app.root_path, install_path)
+    install_path = _resolve_yolo11_install_path(install_path)
     
     def generate():
         # 发送初始状态
@@ -2295,21 +2333,12 @@ def download_models():
         time.sleep(0.5)
         
         try:
-            # 检查YOLO11是否安装
-            if not os.path.exists(install_path) or not os.path.isdir(install_path):
-                yield f"data: {json.dumps({'status': 'error', 'message': 'YOLO11未安装', 'progress': 0})}\n\n"
+            _ensure_yolo11_layout(install_path)
+            if not _yolo11_runtime_ready(install_path):
+                yield f"data: {json.dumps({'status': 'error', 'message': 'YOLO11 运行环境未就绪，请确认已安装 ultralytics', 'progress': 0})}\n\n"
                 return
             
-            # 获取虚拟环境中的python路径
-            if os.name == 'nt':  # Windows
-                python_path = os.path.join(install_path, 'venv', 'Scripts', 'python.exe')
-            else:  # Linux/macOS
-                python_path = os.path.join(install_path, 'venv', 'bin', 'python')
-            
-            # 检查python路径是否存在
-            if not os.path.exists(python_path):
-                yield f"data: {json.dumps({'status': 'error', 'message': '虚拟环境未找到', 'progress': 0})}\n\n"
-                return
+            python_path = _yolo11_python(install_path)
             
             # 创建models目录
             models_dir = os.path.join(install_path, 'models')
@@ -2353,22 +2382,17 @@ def list_models():
     
     # 获取安装路径
     install_path = request.args.get('install_path', 'plugins/yolo11')
-    # 确保安装路径是相对于项目根目录的
-    if not os.path.isabs(install_path):
-        install_path = os.path.join(app.root_path, install_path)
+    install_path = _ensure_yolo11_layout(install_path)
     
     # 初始化模型列表
     models = []
     
-    # 检查YOLO11是否安装
-    if os.path.exists(install_path) and os.path.isdir(install_path):
-        # 检查models目录是否存在
-        models_dir = os.path.join(install_path, 'models')
-        if os.path.exists(models_dir) and os.path.isdir(models_dir):
-            # 列出models目录下的所有.pt文件
-            for file in os.listdir(models_dir):
-                if file.endswith('.pt'):
-                    models.append(file)
+    # 检查models目录
+    models_dir = os.path.join(install_path, 'models')
+    if os.path.isdir(models_dir):
+        for file in os.listdir(models_dir):
+            if file.endswith('.pt'):
+                models.append(file)
     
     return jsonify({'models': models})
 

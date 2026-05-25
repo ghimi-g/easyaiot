@@ -548,6 +548,7 @@ create_auto_labeling_env_file() {
     sed -i 's|^MINIO_SECRET_KEY=.*|MINIO_SECRET_KEY=basiclab@iot975248395|' "$env_docker"
     sed -i 's|^FLASK_RUN_PORT=.*|FLASK_RUN_PORT=8000|' "$env_docker"
     sed -i 's|^SERVICE_NAME=.*|SERVICE_NAME=auto-labeling-server|' "$env_docker"
+    sed -i 's|^DATASET_API_BASE=.*|DATASET_API_BASE=http://127.0.0.1:48080/admin-api|' "$env_docker"
     print_success "标注平台中间件连接已配置"
 }
 

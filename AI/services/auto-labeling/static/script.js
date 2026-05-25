@@ -1495,7 +1495,6 @@ function deleteSelectedImages() {
 // 显示数据集模态框
 function showDatasetModal() {
     document.getElementById('datasetModal').style.display = 'block';
-    loadCloudDatasetOptions();
 }
 
 // 显示导出模态框
@@ -1551,14 +1550,15 @@ function checkYolo11InstallStatus() {
             // 更新安装信息显示
             const installInfoElement = document.getElementById('yolo11InstallInfo');
             if (isInstalled) {
-                // 显示详细安装信息
-                const installTime = data.install_time || '未知';
-                const hardware = data.has_cuda ? 'CUDA (GPU)' : 'CPU';
-                installInfoElement.innerHTML = `
-                    <p style="margin: 5px 0;"><strong>安装时间:</strong> ${installTime}</p>
-                    <p style="margin: 5px 0;"><strong>硬件支持:</strong> ${hardware}</p>
-                `;
-                installInfoElement.style.display = 'block';
+                if (installInfoElement) {
+                    const installTime = data.install_time || '未知';
+                    const hardware = data.has_cuda ? 'CUDA (GPU)' : 'CPU';
+                    installInfoElement.innerHTML = `
+                        <p style="margin: 5px 0;"><strong>安装时间:</strong> ${installTime}</p>
+                        <p style="margin: 5px 0;"><strong>硬件支持:</strong> ${hardware}</p>
+                    `;
+                    installInfoElement.style.display = 'block';
+                }
                 
                 // 更新按钮状态
                 if (modelsSection) {
@@ -1568,9 +1568,10 @@ function checkYolo11InstallStatus() {
                 if (downloadModelsBtn) downloadModelsBtn.disabled = false;
                 if (refreshModelsBtn) refreshModelsBtn.disabled = false;
             } else {
-                // 隐藏安装信息
-                installInfoElement.innerHTML = '';
-                installInfoElement.style.display = 'none';
+                if (installInfoElement) {
+                    installInfoElement.innerHTML = '';
+                    installInfoElement.style.display = 'none';
+                }
                 
                 // 更新按钮状态
                 if (modelsSection) {

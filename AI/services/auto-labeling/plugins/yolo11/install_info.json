@@ -1,7 +1,7 @@
 {
   "is_installed": true,
   "install_time": "2025-12-05 16:01:36",
-  "install_path": "g:\\×ÀÃæ\\±±Ð¡²Ë\\xclabel-master\\plugins/yolo11",
+  "install_path": "plugins/yolo11",
   "has_cuda": false,
   "hardware": "CPU"
 }
