@@ -322,7 +322,7 @@ public interface CommonGBChannelMapper {
     List<CommonGBChannel> queryByCivilCode(@Param("civilCode") String civilCode);
 
     @SelectProvider(type = ChannelProvider.class, method = "queryByDataTypeAndDeviceIds")
-    List<CommonGBChannel> queryByDataTypeAndDeviceIds(@Param("dataType") Integer dataType, List<Integer> deviceIds);
+    List<CommonGBChannel> queryByDataTypeAndDeviceIds(@Param("dataType") Integer dataType, @Param("deviceIds") List<Integer> deviceIds);
 
     @SelectProvider(type = ChannelProvider.class, method = "queryByGbDeviceIds")
     List<CommonGBChannel> queryByGbDeviceIds(List<String> deviceIds);
