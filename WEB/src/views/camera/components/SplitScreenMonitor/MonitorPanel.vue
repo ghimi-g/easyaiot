@@ -111,6 +111,7 @@
                   :ref="(el) => setPlayerRef(el, i - 1)"
                   :play-url="state.playCells[i - 1]!.url"
                   :hasAudio="false"
+                  @stream-error="handleCellStreamError(i - 1)"
                 />
                 <span class="cell-name" :title="state.playCells[i - 1]!.name">
                   {{ state.playCells[i - 1]!.name }}
@@ -193,6 +194,8 @@ interface PlayCell {
   deviceId: string;
   name: string;
   url: string;
+  /** 播放中断时可回退的原始流地址（仅在播 AI 流且存在原始流时设置） */
+  fallbackUrl?: string | null;
 }
 
 const { createMessage } = useMessage();
@@ -282,11 +285,15 @@ async function startPlayAtCell(
     playerRefs.value[cellIdx].destroy();
   }
 
+  const fallbackUrl = payload.fallbackUrl?.trim();
+  const hasFallback = !!(payload.preferAi && fallbackUrl && fallbackUrl !== payload.url);
+
   state.playerIdx = cellIdx;
   state.playCells[cellIdx] = {
     deviceId: payload.deviceId,
     name: payload.name,
     url: payload.url,
+    fallbackUrl: hasFallback ? fallbackUrl : null,
   };
 
   await nextTick();
@@ -295,8 +302,7 @@ async function startPlayAtCell(
     player.play();
   }
 
-  const fallbackUrl = payload.fallbackUrl?.trim();
-  if (!payload.preferAi || !fallbackUrl || fallbackUrl === payload.url) return;
+  if (!hasFallback) return;
 
   const primaryUrl = payload.url;
   const timerId = window.setTimeout(async () => {
@@ -308,11 +314,23 @@ async function startPlayAtCell(
     createMessage.warning(
       'AI 流暂不可用（请确认算法任务已启动且 ZLM 已收到推流），已切换为原始画面（无检测框）',
     );
-    state.playCells[cellIdx] = { ...cell, url: fallbackUrl };
+    state.playCells[cellIdx] = { ...cell, url: fallbackUrl, fallbackUrl: null };
     await nextTick();
     playerRefs.value[cellIdx]?.play?.();
   }, AI_PLAY_FALLBACK_MS);
   aiFallbackTimers.set(cellIdx, timerId);
+}
+
+/** AI 流播放后中断（timeout/error）：回退到原始流，避免无限"疯狂加载中" */
+function handleCellStreamError(cellIdx: number) {
+  const cell = state.playCells[cellIdx];
+  if (!cell) return;
+  const fb = cell.fallbackUrl?.trim();
+  if (!fb || fb === cell.url) return;
+  clearAiFallbackTimer(cellIdx);
+  createMessage.warning('AI 流已中断，已切换为原始画面（无检测框）');
+  state.playCells[cellIdx] = { ...cell, url: fb, fallbackUrl: null };
+  nextTick(() => playerRefs.value[cellIdx]?.play?.());
 }
 
 async function reloadPlayCellAtIndex(cellIdx: number) {

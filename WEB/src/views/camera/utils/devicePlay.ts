@@ -103,8 +103,13 @@ function pickAiPlayUrl(device: DirectStreamFields): string | null {
   return toBrowserPlayUrl(device.ai_http_stream) || toBrowserPlayUrl(device.ai_rtmp_stream);
 }
 
+/** 探测时判定"真有推流"所需的最小媒体字节数（FLV 头仅 13B，无推流方时只回头部就停） */
+const PROBE_MIN_MEDIA_BYTES = 1024;
+
 /**
  * 快速探测流是否可播（避免无算法任务时长时间等待空 AI 地址）。
+ * 仅返回 200/FLV 头不足为据：SRS 对任何 FLV 请求都会临时创建空源并回头部，
+ * 因此必须确认在超时窗口内确有媒体数据流过，才认定 AI 流已就绪。
  * 探测失败时返回 false，调用方应直接播原始流。
  */
 export async function probeStreamPlayable(
@@ -113,20 +118,39 @@ export async function probeStreamPlayable(
 ): Promise<boolean> {
   const target = url?.trim();
   if (!target || typeof window === 'undefined') return false;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(target, {
       method: 'GET',
       signal: controller.signal,
-      headers: { Range: 'bytes=0-1' },
       cache: 'no-store',
     });
-    window.clearTimeout(timer);
     if (res.status === 404 || res.status === 403) return false;
-    return res.ok || res.status === 206;
+    if (!res.ok && res.status !== 206) return false;
+    if (!res.body) return false;
+
+    const reader = res.body.getReader();
+    let received = 0;
+    try {
+      while (received < PROBE_MIN_MEDIA_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) received += value.length;
+      }
+    } finally {
+      // 停止拉流，释放 SRS 上的临时消费连接
+      try {
+        await reader.cancel();
+      } catch {
+        /* ignore */
+      }
+    }
+    return received >= PROBE_MIN_MEDIA_BYTES;
   } catch {
     return false;
+  } finally {
+    window.clearTimeout(timer);
   }
 }
 

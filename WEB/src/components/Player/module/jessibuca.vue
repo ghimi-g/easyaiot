@@ -1,6 +1,6 @@
 <template>
   <div style="width: 100%; height: 100%; background-color: #000c17">
-    <div ref="container" id="container" @dblclick="fullscreen" @mousemove="mouseenter">
+    <div ref="container" class="jessibuca-container" @dblclick="fullscreen" @mousemove="mouseenter">
       <transition name="toolBtn">
         <div
           v-if="showToolBtn"
@@ -94,6 +94,7 @@ import {ref} from "vue";
 export default {
   name: "Player",
   components: {Icon},
+  emits: ["stream-error"],
   props: {
     playUrl: {
       type: String,
@@ -164,7 +165,7 @@ export default {
             container: this.$refs.container,
             decoder: '/static/js/jessibuca/decoder.js',
             videoBuffer: 0.2, // 缓存时长
-            isResize: false,
+            isResize: true, // 等比缩放，避免子码流(4:3)在16:9格子里被拉伸放大
             useWCS: pageHttps,
             useMSE: this.useMSE,
             autoWasm: true,
@@ -237,9 +238,11 @@ export default {
       });
       this.jessibuca.on("error", function (error) {
         console.log("error", error);
+        _this.$emit("stream-error", { type: "error", detail: error });
       });
       this.jessibuca.on("timeout", function () {
         console.log("timeout");
+        _this.$emit("stream-error", { type: "timeout" });
       });
       this.jessibuca.on('start', function () {
         console.log('frame start');
@@ -275,7 +278,10 @@ export default {
     play() {
       // this.jessibuca.onPlay = () => (this.playing = true);
 
-      if (this.playUrl) {
+      if (!this.jessibuca && this.$refs.container) {
+        this.create();
+      }
+      if (this.playUrl && this.jessibuca) {
         this.jessibuca.play(this.playUrl);
       }
     },
@@ -300,8 +306,12 @@ export default {
     async destroy() {
       if (this.jessibuca) {
         await this.jessibuca.destroy();
+        this.jessibuca = null;
       }
-      this.create();
+      // 仅当容器仍在(切流复用)时才重建；容器已被移除(删格/卸载)时跳过，避免 "Jessibuca need container option" 崩溃
+      if (this.$refs.container) {
+        this.create();
+      }
       this.playing = false;
       this.loaded = false;
       this.performance = "";
@@ -413,7 +423,7 @@ export default {
   opacity: 0;
 }
 
-#container video {
+.jessibuca-container video {
   max-height: 100%;
 }
 </style>
