@@ -154,7 +154,11 @@ export interface FaceRecModelStatus {
   path?: string;
   size_bytes: number;
   downloading: boolean;
+  /** idle | downloading | extracting | done | error */
+  stage?: string;
   progress: number;
+  downloaded_bytes?: number;
+  total_bytes?: number;
   error?: string | null;
 }
 
@@ -449,10 +453,26 @@ export const mergeAllFaceNormalizeGroups = (libraryId: number, threshold = 0.75)
 
 /** 查询人脸特征提取模型是否已下载 */
 export const getFaceRecModelStatus = () => {
-  return commonApi<{ code: number; msg: string; data: FaceRecModelStatus }>(
-    'get',
-    `${FACE_PREFIX}/model/status`,
-  );
+  defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
+  return defHttp
+    .get(
+      {
+        url: `${FACE_PREFIX}/model/status`,
+        headers: {
+          // @ts-ignore
+          ignoreCancelToken: true,
+        },
+      },
+      { isTransformResponse: false, errorMessageMode: 'none' },
+    )
+    .then((res) => {
+      const body = ((res as { data?: { code: number; msg: string; data: FaceRecModelStatus } })?.data ??
+        res) as { code: number; msg: string; data: FaceRecModelStatus };
+      if (!FACE_API_SUCCESS_CODES.has(body?.code)) {
+        throw new Error(body?.msg || '查询失败');
+      }
+      return body;
+    });
 };
 
 /** 触发服务端下载人脸特征提取模型 */

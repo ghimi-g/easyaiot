@@ -1,29 +1,15 @@
 <template>
   <div id="face-library">
-    <div v-if="!modelStatusChecked" class="model-status-loading">
-      <Spin tip="正在检查人脸特征模型..." />
-    </div>
-
-    <div v-else-if="!modelReady" class="model-missing-panel">
-      <Result status="info" title="需下载人脸特征提取模型">
-        <template #subTitle>
-          <p>人脸库功能依赖 <code>face_rec.onnx</code>（约 167MB，InsightFace ArcFace）。</p>
-          <p>该模型体积较大，不随代码仓库分发，请在本机 VIDEO 服务目录下载后再使用。</p>
-          <p v-if="modelStatus?.error" class="model-error-text">{{ modelStatus.error }}</p>
-        </template>
-        <template #extra>
-          <Progress
-            v-if="modelDownloading"
-            :percent="modelStatus?.progress ?? 0"
-            status="active"
-            style="max-width: 360px; margin: 0 auto 16px"
-          />
-          <a-button type="primary" size="large" :loading="modelDownloading" @click="handleDownloadModel">
-            {{ modelDownloading ? '正在下载...' : '下载模型' }}
-          </a-button>
-        </template>
-      </Result>
-    </div>
+    <FaceModelSetupPanel
+      v-if="!modelReady"
+      :checking="!modelStatusChecked"
+      :model-status="modelStatus"
+      :show-progress="showProgressPanel"
+      :progress="displayProgress"
+      :current-step="downloadStepCurrent"
+      :finished="modelDownloadJustFinished"
+      @download="handleDownloadModel"
+    />
 
     <template v-else>
     <!-- 表格模式 -->
@@ -169,10 +155,10 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { PlusOutlined, SwapOutlined } from '@ant-design/icons-vue';
-import { List, Modal, Popconfirm, Progress, Result, Spin } from 'ant-design-vue';
+import { List, Modal, Popconfirm, Spin } from 'ant-design-vue';
 import { BasicForm, useForm } from '@/components/Form';
 import { BasicTable, TableAction, useTable } from '@/components/Table';
 import { useDrawer } from '@/components/Drawer';
@@ -194,6 +180,7 @@ import {
 import { getBasicColumns, getFormConfig } from './Data';
 import FaceLibraryModal from './FaceLibraryModal.vue';
 import FaceAutoEnrollDrawer from './FaceAutoEnrollDrawer.vue';
+import FaceModelSetupPanel from './FaceModelSetupPanel.vue';
 import FACE_LIBRARY_IMAGE from '@/assets/images/video/snap-task.png';
 
 const ListItem = List.Item;
@@ -214,32 +201,79 @@ const autoEnrollTogglingId = ref<number | null>(null);
 const modelStatusChecked = ref(false);
 const modelStatus = ref<FaceRecModelStatus | null>(null);
 const modelPollTimer = ref<ReturnType<typeof setInterval> | null>(null);
+const smoothProgress = ref(0);
+const modelDownloadJustFinished = ref(false);
+const downloadStarted = ref(false);
+const finishTimer = ref<ReturnType<typeof setTimeout> | null>(null);
+
+const MODEL_POLL_INTERVAL_MS = 800;
 
 const modelReady = computed(() => !!modelStatus.value?.exists);
 const modelDownloading = computed(() => !!modelStatus.value?.downloading);
+const showProgressPanel = computed(
+  () => downloadStarted.value || modelDownloading.value || modelDownloadJustFinished.value,
+);
+
+const downloadStepCurrent = computed(() => {
+  const stage = modelStatus.value?.stage;
+  if (modelDownloadJustFinished.value || stage === 'done') return 2;
+  if (stage === 'extracting') return 1;
+  if (stage === 'downloading') return 0;
+  return 0;
+});
+
+const displayProgress = computed(() => {
+  if (modelDownloadJustFinished.value) return 100;
+  return smoothProgress.value;
+});
+
+watch(
+  () => modelStatus.value?.progress,
+  (progress) => {
+    if (progress != null && progress > smoothProgress.value) {
+      smoothProgress.value = progress;
+    }
+  },
+);
+
+function clearFinishTimer() {
+  if (finishTimer.value) {
+    clearTimeout(finishTimer.value);
+    finishTimer.value = null;
+  }
+}
+
+function showDownloadSuccess() {
+  modelDownloadJustFinished.value = true;
+  smoothProgress.value = 100;
+  clearFinishTimer();
+  finishTimer.value = setTimeout(() => {
+    modelDownloadJustFinished.value = false;
+  }, 1200);
+}
 
 async function refreshModelStatus() {
   const wasReady = modelReady.value;
   try {
     const res = await getFaceRecModelStatus();
-    if (res.code === 0) {
+    if (res?.data) {
       modelStatus.value = res.data;
       if (res.data.exists) {
         stopModelPolling();
-        if (!wasReady && viewMode.value === 'card') {
-          loadLibraryList();
+        downloadStarted.value = false;
+        if (!wasReady) {
+          showDownloadSuccess();
+          createMessage.success('人脸特征模型已安装完成');
+          if (viewMode.value === 'card') {
+            loadLibraryList();
+          }
         }
+      } else if (res.data.stage === 'error') {
+        downloadStarted.value = false;
       }
     }
-  } catch {
-    // 查询失败时仍允许进入页面，具体操作会由后端报错
-    modelStatus.value = {
-      exists: true,
-      filename: 'face_rec.onnx',
-      size_bytes: 0,
-      downloading: false,
-      progress: 0,
-    };
+  } catch (error: unknown) {
+    console.warn('查询人脸模型状态失败', error);
   } finally {
     modelStatusChecked.value = true;
   }
@@ -256,16 +290,35 @@ function startModelPolling() {
   stopModelPolling();
   modelPollTimer.value = setInterval(() => {
     refreshModelStatus();
-  }, 2000);
+  }, MODEL_POLL_INTERVAL_MS);
 }
 
 async function handleDownloadModel() {
   try {
-    await downloadFaceRecModel();
-    createMessage.info('已开始下载人脸特征模型，请稍候...');
+    smoothProgress.value = 0;
+    modelDownloadJustFinished.value = false;
+    downloadStarted.value = true;
+    const res = await downloadFaceRecModel();
+    if (res?.data) {
+      modelStatus.value = {
+        exists: !!res.data.exists,
+        filename: res.data.filename || 'face_rec.onnx',
+        size_bytes: res.data.size_bytes ?? 0,
+        downloading: !!res.data.downloading,
+        stage: res.data.stage,
+        progress: res.data.progress ?? 0,
+        downloaded_bytes: res.data.downloaded_bytes,
+        total_bytes: res.data.total_bytes,
+        error: res.data.error,
+      };
+      if (res.data.progress != null) {
+        smoothProgress.value = res.data.progress;
+      }
+    }
     startModelPolling();
     await refreshModelStatus();
   } catch (error: unknown) {
+    downloadStarted.value = false;
     createMessage.error(parseFaceApiError(error, '触发模型下载失败'));
   }
 }
@@ -523,33 +576,19 @@ onMounted(async () => {
     loadLibraryList();
   }
   if (modelDownloading.value) {
+    downloadStarted.value = true;
     startModelPolling();
   }
 });
 
 onBeforeUnmount(() => {
   stopModelPolling();
+  clearFinishTimer();
 });
 </script>
 
 <style scoped lang="less">
 #face-library {
-  .model-status-loading,
-  .model-missing-panel {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 420px;
-    padding: 48px 24px;
-    background: #fff;
-    border-radius: 8px;
-  }
-
-  .model-error-text {
-    margin-top: 8px;
-    color: #dc2626;
-  }
-
   .toolbar-buttons {
     display: flex;
     align-items: center;
