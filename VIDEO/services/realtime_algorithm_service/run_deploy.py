@@ -45,6 +45,14 @@ from app.utils.async_video_stream import AsyncVideoStream, async_rtsp_read_enabl
 from app.utils.rtsp_stream_utils import open_network_videocapture
 from app.utils.onnx_inference import ONNXInference
 from app.utils.algo_model_detect import run_model_detection
+from app.utils.face_capture_queue_service import (
+    enqueue_face_capture,
+    is_running as face_capture_queue_running,
+    start_face_capture_workers,
+    stop_face_capture_workers,
+    FACE_CAPTURE_QUEUE_SIZE,
+    FACE_CAPTURE_WORKER_THREADS,
+)
 
 
 def _parse_gpu_id_list(value: str) -> List[int]:
@@ -278,9 +286,11 @@ GATEWAY_URL = os.getenv('GATEWAY_URL', 'http://localhost:48080')
 if GATEWAY_URL and GATEWAY_URL != 'http://localhost:48080':
     # 使用网关地址构建hook URL
     ALERT_HOOK_URL = f"{GATEWAY_URL}/video/alert/hook"
+    FACE_MATCHING_PUBLISH_URL = f"{GATEWAY_URL}/video/face/matching/publish"
 else:
     # 回退到使用VIDEO_SERVICE_PORT（本地开发环境）
     ALERT_HOOK_URL = f"http://localhost:{VIDEO_SERVICE_PORT}/video/alert/hook"
+    FACE_MATCHING_PUBLISH_URL = f"http://localhost:{VIDEO_SERVICE_PORT}/video/face/matching/publish"
 
 # 数据库会话
 engine = create_engine(DATABASE_URL)
@@ -1394,6 +1404,12 @@ def try_send_alert_for_detections(
             'image_path': image_path if image_path else None,
         }
         send_alert_event_async(alert_data)
+        try_send_face_matching_for_frame(
+            device_id=device_id,
+            device_name=device_name,
+            frame_for_image=frame_for_image,
+            frame_number=frame_number,
+        )
         extra = f" {log_suffix}" if log_suffix else ""
         logger.info(f"📨 已发送告警事件{extra}：帧 {frame_number}，{len(detections)} 个目标（{object_counts}）")
     except Exception as e:
@@ -1503,6 +1519,55 @@ def save_alert_image(frame: np.ndarray, device_id: str, frame_number: int, detec
     except Exception as e:
         logger.error(f"保存告警图片失败: {str(e)}", exc_info=True)
         return None
+
+
+def _resolve_face_matching_threshold() -> Optional[float]:
+    if not task_config:
+        return None
+    threshold = getattr(task_config, 'face_matching_threshold', None)
+    if threshold is not None:
+        return float(threshold)
+    library = getattr(task_config, 'face_library', None)
+    if library is not None and getattr(library, 'similarity_threshold', None) is not None:
+        return float(library.similarity_threshold)
+    return None
+
+
+def try_send_face_matching_for_frame(
+    device_id: str,
+    device_name: str,
+    frame_for_image: np.ndarray,
+    frame_number: int,
+) -> None:
+    """启用人脸匹配时，将帧送入独立人脸抓取队列（不阻塞主算法链路）"""
+    if not task_config or not bool(getattr(task_config, 'face_matching_enabled', False)):
+        return
+    library_id = getattr(task_config, 'face_library_id', None)
+    if not library_id:
+        logger.warning("人脸匹配已开启但未配置人脸库，跳过投递")
+        return
+    if not face_capture_queue_running():
+        logger.warning("人脸抓取队列未启动，跳过帧 %s", frame_number)
+        return
+
+    library_name = None
+    library = getattr(task_config, 'face_library', None)
+    if library is not None:
+        library_name = getattr(library, 'name', None)
+
+    enqueue_face_capture(
+        frame=frame_for_image,
+        device_id=device_id,
+        device_name=device_name,
+        frame_number=frame_number,
+        task_id=TASK_ID,
+        task_name=getattr(task_config, 'task_name', ''),
+        task_type='realtime',
+        library_id=library_id,
+        library_name=library_name,
+        threshold=_resolve_face_matching_threshold(),
+        publish_url=FACE_MATCHING_PUBLISH_URL,
+    )
 
 
 def send_heartbeat():
@@ -3236,6 +3301,8 @@ def shutdown_yolo_workers(timeout: float = 8.0):
     overlay_executor = None
     alert_executor = None
 
+    stop_face_capture_workers()
+
     yolo_models.clear()
     yolo_model_devices.clear()
 
@@ -3399,6 +3466,15 @@ def main():
             logger.info(f"   ✅ 告警检测线程 {worker_id} 已启动")
     else:
         logger.info("🔔 告警事件未启用，跳过告警检测线程")
+
+    if task_config and bool(getattr(task_config, 'face_matching_enabled', False)):
+        logger.info(
+            f"👤 启动人脸抓取独立队列: size={FACE_CAPTURE_QUEUE_SIZE}, "
+            f"workers={FACE_CAPTURE_WORKER_THREADS}"
+        )
+        start_face_capture_workers(stop_event)
+    else:
+        logger.info("👤 人脸匹配未启用，跳过人脸抓取队列")
 
     # 启动心跳上报线程
     logger.info("💓 启动心跳上报线程...")

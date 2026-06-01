@@ -111,6 +111,10 @@ spring:
         ack-mode: manual_immediate
         missing-topics-fatal: false
         poll-timeout: 600000
+    face-matching:
+      topic: iot-face-matching
+      group-id: iot-sink-face-matching-consumer
+      result-topic: iot-face-matching-result
 
 --- #################### 定时任务相关配置 ####################
 
@@ -227,6 +231,8 @@ minio:
 --- #################### IoT Sink 相关配置 ####################
 
 basiclab:
+  video:
+    service-url: http://localhost:48080
   iot:
     message-bus:
       type: kafka # 消息总线类型：local、kafka

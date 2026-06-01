@@ -358,6 +358,9 @@ def create_algorithm_task(task_name: str,
                          alert_event_suppress_time: int = 5,
                          face_detection_enabled: bool = True,
                          plate_detection_enabled: bool = True,
+                         face_matching_enabled: bool = False,
+                         face_library_id: Optional[int] = None,
+                         face_matching_threshold: Optional[float] = None,
                          alert_notification_enabled: bool = False,
                          alert_notification_config: Optional[str] = None,
                          alarm_suppress_time: int = 300,
@@ -461,6 +464,12 @@ def create_algorithm_task(task_name: str,
             # 实时算法任务：不需要Cron表达式
             cron_expression = None
             frame_skip = 25
+
+        if face_matching_enabled:
+            if not face_library_id:
+                raise ValueError('启用人脸匹配时必须指定人脸库')
+            from models import FaceLibrary
+            FaceLibrary.query.get_or_404(face_library_id)
         
         # 生成唯一编号
         prefix = "REALTIME_TASK" if task_type == 'realtime' else "SNAP_TASK"
@@ -574,6 +583,9 @@ def create_algorithm_task(task_name: str,
             alert_event_suppress_time=alert_event_suppress_time,
             face_detection_enabled=face_detection_enabled,
             plate_detection_enabled=plate_detection_enabled,
+            face_matching_enabled=face_matching_enabled,
+            face_library_id=face_library_id,
+            face_matching_threshold=face_matching_threshold,
             alert_notification_enabled=alert_notification_enabled,
             alert_notification_config=alert_notification_config,
             alarm_suppress_time=alarm_suppress_time,
@@ -729,6 +741,7 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
             'tracking_enabled', 'tracking_similarity_threshold', 'tracking_max_age', 'tracking_smooth_alpha',  # 追踪配置
             'alert_event_enabled', 'alert_event_suppress_time',
             'face_detection_enabled', 'plate_detection_enabled',
+            'face_matching_enabled', 'face_library_id', 'face_matching_threshold',
             'alert_notification_enabled', 'alert_notification_config',
             'alarm_suppress_time',  # 告警配置
             'cron_expression', 'frame_skip',  # 抓拍算法任务配置
@@ -747,6 +760,16 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
             alarm_suppress_time=kwargs.get('alarm_suppress_time'),
         )
         kwargs.update(interval_kwargs)
+
+        if kwargs.get('face_matching_enabled'):
+            lib_id = kwargs.get('face_library_id')
+            if not lib_id:
+                raise ValueError('启用人脸匹配时必须指定人脸库')
+            from models import FaceLibrary
+            FaceLibrary.query.get_or_404(lib_id)
+        elif 'face_matching_enabled' in kwargs and not kwargs.get('face_matching_enabled'):
+            kwargs['face_library_id'] = None
+            kwargs['face_matching_threshold'] = None
         
         # 处理告警通知配置（如果是字典或字符串，需要转换为JSON字符串）
         # 在保存前，从消息模板中提取通知人信息并保存到配置中

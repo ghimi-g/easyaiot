@@ -26,6 +26,8 @@ services:
       - ./temp_uploads:/app/temp_uploads
       # 模型文件目录（如果存在）
       - ./model:/app/model
+      # 人脸特征模型（约 167MB，install 或 WEB 下载，需持久化到宿主机）
+      - ./face_rec.onnx:/app/face_rec.onnx
       # 告警图片目录（与iot-sink服务共享，用于大模型实时分析等服务的图片上传）
       - ./alert_images:/app/alert_images
       # SRS录像目录（与SRS服务共享，用于访问SRS生成的录像文件）

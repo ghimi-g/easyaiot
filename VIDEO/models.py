@@ -632,6 +632,9 @@ class AlgorithmTask(db.Model):
     alert_event_suppress_time = db.Column(db.Integer, default=5, nullable=False, comment='告警事件抑制时间（秒），同一设备两次上报告警事件的最小间隔，减轻Kafka积压，默认5秒')
     face_detection_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用人脸检测')
     plate_detection_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用车牌检测')
+    face_matching_enabled = db.Column(db.Boolean, default=False, nullable=False, comment='是否启用人脸匹配（默认关闭）')
+    face_library_id = db.Column(db.Integer, db.ForeignKey('face_library.id', ondelete='SET NULL'), nullable=True, comment='关联人脸库ID')
+    face_matching_threshold = db.Column(db.Float, nullable=True, comment='人脸匹配相似度阈值（为空则使用人脸库默认值）')
     
     # 告警通知配置
     alert_notification_enabled = db.Column(db.Boolean, default=False, nullable=False, comment='是否启用告警通知')
@@ -677,6 +680,7 @@ class AlgorithmTask(db.Model):
     # 关联关系
     devices = db.relationship('Device', secondary=algorithm_task_device, backref='algorithm_task_list', lazy=True)  # 多对多关系
     snap_space = db.relationship('SnapSpace', backref='algorithm_tasks', lazy=True)
+    face_library = db.relationship('FaceLibrary', backref='algorithm_tasks', lazy=True)
     # 算法模型服务关联（通过task_id关联）
     algorithm_services = db.relationship('AlgorithmModelService', backref='algorithm_task', lazy=True, cascade='all, delete-orphan')
     # 检测区域关联（通过task_id关联，支持统一后的算法任务，不使用数据库外键约束）
@@ -724,6 +728,10 @@ class AlgorithmTask(db.Model):
             'alert_event_suppress_time': self.alert_event_suppress_time,
             'face_detection_enabled': self.face_detection_enabled,
             'plate_detection_enabled': self.plate_detection_enabled,
+            'face_matching_enabled': self.face_matching_enabled,
+            'face_library_id': self.face_library_id,
+            'face_library_name': self.face_library.name if self.face_library else None,
+            'face_matching_threshold': self.face_matching_threshold,
             'alert_notification_enabled': self.alert_notification_enabled,
             'alert_notification_config': json.loads(self.alert_notification_config) if self.alert_notification_config else None,
             'alarm_suppress_time': self.alarm_suppress_time,
@@ -751,6 +759,230 @@ class AlgorithmTask(db.Model):
             'algorithm_services': algorithm_services_list,  # 添加算法模型服务列表
             'created_at': utc_isoformat_z(self.created_at),
             'updated_at': utc_isoformat_z(self.updated_at)
+        }
+
+
+class FaceLibrary(db.Model):
+    """人脸库（支持业务标签，供算法任务人脸匹配使用）"""
+    __tablename__ = 'face_library'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(255), nullable=False, comment='人脸库名称')
+    code = db.Column(db.String(100), nullable=False, unique=True, comment='人脸库编码（唯一）')
+    business_tags = db.Column(db.Text, nullable=True, comment='业务标签（JSON数组，如["员工","访客"]）')
+    description = db.Column(db.String(500), nullable=True, comment='描述')
+    similarity_threshold = db.Column(db.Float, default=0.55, nullable=False, comment='默认匹配相似度阈值')
+    is_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用')
+    face_count = db.Column(db.Integer, default=0, nullable=False, comment='人脸数量（冗余统计）')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.utcnow())
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.utcnow(), onupdate=lambda: datetime.utcnow())
+
+    entries = db.relationship('FaceEntry', backref='library', lazy=True, cascade='all, delete-orphan')
+
+    def to_dict(self, include_entries: bool = False):
+        import json
+        tags = []
+        if self.business_tags:
+            try:
+                tags = json.loads(self.business_tags) if isinstance(self.business_tags, str) else self.business_tags
+            except Exception:
+                tags = []
+        data = {
+            'id': self.id,
+            'name': self.name,
+            'code': self.code,
+            'business_tags': tags,
+            'description': self.description,
+            'similarity_threshold': self.similarity_threshold,
+            'is_enabled': self.is_enabled,
+            'face_count': self.face_count,
+            'created_at': utc_isoformat_z(self.created_at),
+            'updated_at': utc_isoformat_z(self.updated_at),
+        }
+        if include_entries:
+            data['entries'] = [e.to_dict() for e in (self.entries or [])]
+        return data
+
+
+class FacePerson(db.Model):
+    """归一化后的人员（可包含多张人脸照片）"""
+    __tablename__ = 'face_person'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    library_id = db.Column(db.Integer, db.ForeignKey('face_library.id', ondelete='CASCADE'), nullable=False, comment='所属人脸库ID')
+    person_name = db.Column(db.String(255), nullable=False, comment='人员姓名')
+    person_code = db.Column(db.String(100), nullable=True, comment='人员编号/工号')
+    cover_entry_id = db.Column(db.Integer, nullable=True, comment='封面人脸条目ID')
+    is_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用')
+    face_count = db.Column(db.Integer, default=1, nullable=False, comment='关联人脸照片数')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.utcnow())
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.utcnow(), onupdate=lambda: datetime.utcnow())
+
+    entries = db.relationship('FaceEntry', backref='person', lazy=True, foreign_keys='FaceEntry.person_id')
+
+    def to_dict(self, include_entries: bool = False, cover_image_url: str = None):
+        data = {
+            'id': self.id,
+            'library_id': self.library_id,
+            'person_name': self.person_name,
+            'person_code': self.person_code,
+            'cover_entry_id': self.cover_entry_id,
+            'cover_image_url': cover_image_url,
+            'is_enabled': self.is_enabled,
+            'face_count': self.face_count,
+            'created_at': utc_isoformat_z(self.created_at),
+            'updated_at': utc_isoformat_z(self.updated_at),
+        }
+        if include_entries:
+            data['entries'] = [e.to_dict() for e in (self.entries or [])]
+        return data
+
+
+class FaceEntry(db.Model):
+    """人脸库中的人脸条目"""
+    __tablename__ = 'face_entry'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    library_id = db.Column(db.Integer, db.ForeignKey('face_library.id', ondelete='CASCADE'), nullable=False, comment='所属人脸库ID')
+    person_id = db.Column(db.Integer, db.ForeignKey('face_person.id', ondelete='CASCADE'), nullable=True, comment='所属归一化人员ID')
+    person_name = db.Column(db.String(255), nullable=False, comment='人员姓名')
+    person_code = db.Column(db.String(100), nullable=True, comment='人员编号/工号')
+    image_path = db.Column(db.String(500), nullable=True, comment='人脸图片本地路径')
+    image_url = db.Column(db.String(500), nullable=True, comment='人脸图片URL（MinIO）')
+    milvus_id = db.Column(db.String(64), nullable=True, comment='Milvus向量ID')
+    remark = db.Column(db.String(500), nullable=True, comment='备注')
+    is_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.utcnow())
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.utcnow(), onupdate=lambda: datetime.utcnow())
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'library_id': self.library_id,
+            'person_id': self.person_id,
+            'person_name': self.person_name,
+            'person_code': self.person_code,
+            'image_path': self.image_path,
+            'image_url': self.image_url,
+            'milvus_id': self.milvus_id,
+            'remark': self.remark,
+            'is_enabled': self.is_enabled,
+            'created_at': utc_isoformat_z(self.created_at),
+            'updated_at': utc_isoformat_z(self.updated_at),
+        }
+
+
+class FaceAutoEnrollTask(db.Model):
+    """人脸库自动录入任务（绑定摄像头，限时采集新人脸）"""
+    __tablename__ = 'face_auto_enroll_task'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    library_id = db.Column(
+        db.Integer, db.ForeignKey('face_library.id', ondelete='CASCADE'),
+        nullable=False, unique=True, comment='所属人脸库ID',
+    )
+    device_ids = db.Column(db.Text, nullable=False, default='[]', comment='绑定的摄像头ID列表（JSON数组）')
+    duration_minutes = db.Column(db.Integer, default=60, nullable=False, comment='录入模式开启时长（分钟）')
+    capture_interval_sec = db.Column(db.Integer, default=5, nullable=False, comment='抓帧间隔（秒）')
+    person_name_prefix = db.Column(db.String(50), default='自动录入', nullable=False, comment='自动命名前缀')
+    is_running = db.Column(db.Boolean, default=False, nullable=False, comment='是否正在运行')
+    started_at = db.Column(db.DateTime, nullable=True, comment='本次启动时间')
+    expires_at = db.Column(db.DateTime, nullable=True, comment='本次到期时间')
+    enrolled_count = db.Column(db.Integer, default=0, nullable=False, comment='本次已录入数量')
+    skipped_count = db.Column(db.Integer, default=0, nullable=False, comment='本次跳过数量（已存在或重复）')
+    last_device_index = db.Column(db.Integer, default=0, nullable=False, comment='轮询摄像头索引')
+    last_tick_at = db.Column(db.DateTime, nullable=True, comment='上次抓帧时间')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.utcnow())
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.utcnow(), onupdate=lambda: datetime.utcnow())
+
+    library = db.relationship('FaceLibrary', backref=db.backref('auto_enroll_task', uselist=False), lazy=True)
+
+    def to_dict(self):
+        import json
+        device_ids = []
+        try:
+            device_ids = json.loads(self.device_ids) if isinstance(self.device_ids, str) else (self.device_ids or [])
+        except Exception:
+            device_ids = []
+        device_names = []
+        if device_ids:
+            devices = Device.query.filter(Device.id.in_(device_ids)).all()
+            name_map = {d.id: d.name for d in devices}
+            device_names = [name_map.get(did, did) for did in device_ids]
+        return {
+            'id': self.id,
+            'library_id': self.library_id,
+            'device_ids': device_ids,
+            'device_names': device_names,
+            'duration_minutes': self.duration_minutes,
+            'capture_interval_sec': self.capture_interval_sec,
+            'person_name_prefix': self.person_name_prefix,
+            'is_running': self.is_running,
+            'started_at': utc_isoformat_z(self.started_at),
+            'expires_at': utc_isoformat_z(self.expires_at),
+            'enrolled_count': self.enrolled_count,
+            'skipped_count': self.skipped_count,
+            'last_device_index': self.last_device_index,
+            'last_tick_at': utc_isoformat_z(self.last_tick_at),
+            'created_at': utc_isoformat_z(self.created_at),
+            'updated_at': utc_isoformat_z(self.updated_at),
+        }
+
+
+class FaceMatchRecord(db.Model):
+    """人脸匹配记录（Kafka消费端写入）"""
+    __tablename__ = 'face_match_record'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    task_id = db.Column(db.Integer, nullable=True, comment='算法任务ID')
+    task_name = db.Column(db.String(255), nullable=True, comment='算法任务名称')
+    device_id = db.Column(db.String(100), nullable=False, comment='设备ID')
+    device_name = db.Column(db.String(255), nullable=True, comment='设备名称')
+    library_id = db.Column(db.Integer, nullable=True, comment='人脸库ID')
+    library_name = db.Column(db.String(255), nullable=True, comment='人脸库名称')
+    face_image_path = db.Column(db.String(500), nullable=True, comment='待匹配人脸图片路径')
+    matched = db.Column(db.Boolean, default=False, nullable=False, comment='是否匹配成功')
+    matched_person_name = db.Column(db.String(255), nullable=True, comment='匹配到的人员姓名')
+    matched_person_code = db.Column(db.String(100), nullable=True, comment='匹配到的人员编号')
+    matched_face_entry_id = db.Column(db.Integer, nullable=True, comment='匹配到的人脸条目ID')
+    similarity = db.Column(db.Float, nullable=True, comment='最高相似度')
+    threshold = db.Column(db.Float, nullable=True, comment='使用的阈值')
+    candidates = db.Column(db.Text, nullable=True, comment='候选结果（JSON）')
+    alert_id = db.Column(db.Integer, nullable=True, comment='关联告警ID')
+    task_type = db.Column(db.String(20), nullable=True, comment='任务类型')
+    status = db.Column(db.String(20), default='pending', nullable=False, comment='处理状态[pending,success,failed]')
+    error_message = db.Column(db.String(500), nullable=True, comment='错误信息')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.utcnow())
+
+    def to_dict(self):
+        import json
+        candidates = None
+        if self.candidates:
+            try:
+                candidates = json.loads(self.candidates) if isinstance(self.candidates, str) else self.candidates
+            except Exception:
+                candidates = self.candidates
+        return {
+            'id': self.id,
+            'task_id': self.task_id,
+            'task_name': self.task_name,
+            'device_id': self.device_id,
+            'device_name': self.device_name,
+            'library_id': self.library_id,
+            'library_name': self.library_name,
+            'face_image_path': self.face_image_path,
+            'matched': self.matched,
+            'matched_person_name': self.matched_person_name,
+            'matched_person_code': self.matched_person_code,
+            'matched_face_entry_id': self.matched_face_entry_id,
+            'similarity': self.similarity,
+            'threshold': self.threshold,
+            'candidates': candidates,
+            'alert_id': self.alert_id,
+            'task_type': self.task_type,
+            'status': self.status,
+            'error_message': self.error_message,
+            'created_at': utc_isoformat_z(self.created_at),
         }
 
 

@@ -50,6 +50,10 @@ export interface AlgorithmTask {
   alert_event_suppress_time?: number; // 告警事件抑制时间（秒），减轻 Kafka 积压
   face_detection_enabled?: boolean; // 是否启用人脸检测
   plate_detection_enabled?: boolean; // 是否启用车牌检测
+  face_matching_enabled?: boolean; // 是否启用人脸匹配（默认关闭）
+  face_library_id?: number; // 关联人脸库
+  face_library_name?: string;
+  face_matching_threshold?: number; // 匹配阈值（可选，覆盖人脸库默认）
   alert_notification_enabled?: boolean; // 是否启用告警通知
   alert_notification_config?: {
     channels: Array<{
@@ -124,6 +128,9 @@ export const createAlgorithmTask = (data: {
   alert_event_suppress_time?: number;
   face_detection_enabled?: boolean;
   plate_detection_enabled?: boolean;
+  face_matching_enabled?: boolean;
+  face_library_id?: number;
+  face_matching_threshold?: number;
   alert_notification_enabled?: boolean;
   alert_notification_config?: {
     channels: Array<{

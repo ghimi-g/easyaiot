@@ -1,6 +1,6 @@
 import type { AppRouteModule, AppRouteRecordRaw } from '@/router/types'
 
-import { GB28181_ROUTE_MODULE, PAGE_NOT_FOUND_ROUTE, REDIRECT_ROUTE } from '@/router/routes/basic'
+import { GB28181_ROUTE_MODULE, FACE_MANAGE_ROUTE, PAGE_NOT_FOUND_ROUTE, REDIRECT_ROUTE } from '@/router/routes/basic'
 
 import { PageEnum } from '@/enums/pageEnum'
 import { t } from '@/hooks/web/useI18n'
@@ -143,6 +143,7 @@ export const basicRoutes = [
   CodegenRoute,
   JobLogRoute,
   GB28181_ROUTE_MODULE,
+  FACE_MANAGE_ROUTE,
   REDIRECT_ROUTE,
   PAGE_NOT_FOUND_ROUTE,
 ]

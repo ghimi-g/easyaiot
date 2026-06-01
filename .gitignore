@@ -85,3 +85,8 @@ hs_err_pid*
 TASK/build-linux/
 TASK/build/
 TASK/cmake-build-debug/
+
+# VIDEO 人脸模型（大文件由 install 脚本或 WEB 人脸库页下载，不随仓库分发）
+VIDEO/face_rec.onnx
+VIDEO/face_matching_insightface_buffalo_l/
+VIDEO/face_capture_head_yolov8.onnx

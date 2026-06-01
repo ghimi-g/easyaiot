@@ -26,5 +26,8 @@ WEB/docker-build-logs/** -diff
 *.onnx binary
 *.bin binary
 
+# VIDEO 人脸特征模型（体积大，本地/install 下载，不参与 diff）
+VIDEO/face_rec.onnx binary -diff
+
 
 .image/ binary

@@ -186,6 +186,9 @@
         <TabPane key="8" tab="节点管理">
           <Gb28181Node ref="gb28181NodeRef"/>
         </TabPane>
+        <TabPane key="9" tab="人脸库">
+          <FaceLibrary ref="faceLibraryRef"/>
+        </TabPane>
       </Tabs>
     </div>
   </div>
@@ -219,6 +222,7 @@ import DialogPlayer from "@/components/VideoPlayer/DialogPlayer.vue";
 import SplitScreenMonitor from "./components/SplitScreenMonitor/index.vue";
 import SnapSpace from "./components/SnapSpace/index.vue";
 import AlgorithmTask from "./components/AlgorithmTask/index.vue";
+import FaceLibrary from "./components/FaceLibrary/index.vue";
 import RecordSpace from "./components/RecordSpace/index.vue";
 import DeviceMixedCardList from './components/DeviceMixedCardList/index.vue';
 import Gb28181DeviceDetail from './components/Gb28181DeviceDetail/index.vue';
@@ -311,6 +315,7 @@ const recordSpaceRef = ref();
 
 // 算法任务组件引用
 const algorithmTaskRef = ref();
+const faceLibraryRef = ref();
 
 // 推流转发组件引用
 const streamForwardRef = ref();
@@ -329,6 +334,7 @@ const CAMERA_TAB_KEYS = {
   ALGORITHM: '6',
   GB_PULL_PROXY: '7',
   GB_NODE: '8',
+  FACE_LIBRARY: '9',
 } as const;
 
 const CAMERA_TAB_ID_SET = new Set<string>(Object.values(CAMERA_TAB_KEYS));
@@ -369,6 +375,9 @@ const handleTabClick = (activeKey: string) => {
   // 切换到算法任务标签页时，刷新数据
   if (activeKey === CAMERA_TAB_KEYS.ALGORITHM && algorithmTaskRef.value) {
     algorithmTaskRef.value.refresh();
+  }
+  if (activeKey === CAMERA_TAB_KEYS.FACE_LIBRARY && faceLibraryRef.value) {
+    faceLibraryRef.value.refresh?.();
   }
   // 切换到推流转发标签页时，刷新数据
   if (activeKey === CAMERA_TAB_KEYS.STREAM_FORWARD && streamForwardRef.value) {

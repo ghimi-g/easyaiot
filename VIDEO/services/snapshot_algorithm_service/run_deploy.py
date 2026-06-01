@@ -48,6 +48,14 @@ from app.utils.cron_utils import (
 )
 from app.utils.onnx_inference import ONNXInference
 from app.utils.algo_model_detect import run_model_detection
+from app.utils.face_capture_queue_service import (
+    enqueue_face_capture,
+    is_running as face_capture_queue_running,
+    start_face_capture_workers,
+    stop_face_capture_workers,
+    FACE_CAPTURE_QUEUE_SIZE,
+    FACE_CAPTURE_WORKER_THREADS,
+)
 from app.utils.rtsp_stream_utils import (
     build_opencv_ffmpeg_capture_options,
     effective_rtsp_transport,
@@ -273,8 +281,10 @@ GATEWAY_URL = os.getenv('GATEWAY_URL', 'http://localhost:48080')
 # 告警hook URL：优先使用 GATEWAY_URL，否则回退 VIDEO_SERVICE_PORT
 if GATEWAY_URL and GATEWAY_URL != 'http://localhost:48080':
     ALERT_HOOK_URL = f"{GATEWAY_URL}/video/alert/hook"
+    FACE_MATCHING_PUBLISH_URL = f"{GATEWAY_URL}/video/face/matching/publish"
 else:
     ALERT_HOOK_URL = f"http://localhost:{VIDEO_SERVICE_PORT}/video/alert/hook"
+    FACE_MATCHING_PUBLISH_URL = f"http://localhost:{VIDEO_SERVICE_PORT}/video/face/matching/publish"
 
 # 数据库会话
 engine = create_engine(DATABASE_URL)
@@ -1273,6 +1283,12 @@ def try_send_snapshot_detection_alert(
         f"{len(detections)} 个目标 {object_counts}"
     )
     send_alert_event_async(alert_data)
+    try_send_face_matching_for_frame(
+        device_id=device_id,
+        device_name=device_name,
+        frame_for_image=frame_image,
+        frame_number=frame_number,
+    )
 
 
 def mark_cron_slot_captured(device_id: str, current_time: float) -> None:
@@ -1496,6 +1512,81 @@ def save_alert_image(frame: np.ndarray, device_id: str, frame_number: int, detec
     except Exception as e:
         logger.error(f"保存告警图片失败: {str(e)}", exc_info=True)
         return None
+
+
+def save_face_crop_image(frame: np.ndarray, device_id: str, frame_number: int, detection: Dict) -> Optional[str]:
+    try:
+        bbox = detection.get('bbox') or []
+        if len(bbox) < 4:
+            return None
+        x1, y1, x2, y2 = [int(v) for v in bbox[:4]]
+        h, w = frame.shape[:2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        if x2 <= x1 or y2 <= y1:
+            return None
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        video_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        images_root = os.getenv('FACE_IMAGES_DIR', os.path.join(video_root, 'data', 'face_images'))
+        face_dir = os.path.join(images_root, f'task_{TASK_ID}', device_id, 'matching')
+        os.makedirs(face_dir, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        track_id = detection.get('track_id', 0)
+        image_filename = f"{timestamp}_frame{frame_number}_track{track_id}_face.jpg"
+        image_path = os.path.join(face_dir, image_filename)
+        cv2.imwrite(image_path, crop)
+        return image_path
+    except Exception as e:
+        logger.error(f"保存人脸裁剪图失败: {str(e)}", exc_info=True)
+        return None
+
+
+def _resolve_face_matching_threshold() -> Optional[float]:
+    if not task_config:
+        return None
+    threshold = getattr(task_config, 'face_matching_threshold', None)
+    if threshold is not None:
+        return float(threshold)
+    library = getattr(task_config, 'face_library', None)
+    if library is not None and getattr(library, 'similarity_threshold', None) is not None:
+        return float(library.similarity_threshold)
+    return None
+
+
+def try_send_face_matching_for_frame(
+    device_id: str,
+    device_name: str,
+    frame_for_image: np.ndarray,
+    frame_number: int,
+) -> None:
+    if not task_config or not bool(getattr(task_config, 'face_matching_enabled', False)):
+        return
+    library_id = getattr(task_config, 'face_library_id', None)
+    if not library_id:
+        return
+    if not face_capture_queue_running():
+        return
+
+    library_name = None
+    library = getattr(task_config, 'face_library', None)
+    if library is not None:
+        library_name = getattr(library, 'name', None)
+
+    enqueue_face_capture(
+        frame=frame_for_image,
+        device_id=device_id,
+        device_name=device_name,
+        frame_number=frame_number,
+        task_id=TASK_ID,
+        task_name=getattr(task_config, 'task_name', ''),
+        task_type='snap',
+        library_id=library_id,
+        library_name=library_name,
+        threshold=_resolve_face_matching_threshold(),
+        publish_url=FACE_MATCHING_PUBLISH_URL,
+    )
 
 
 def send_heartbeat():
@@ -2194,6 +2285,8 @@ def shutdown_yolo_workers(timeout: float = 8.0):
     yolo_models.clear()
     yolo_model_devices.clear()
 
+    stop_face_capture_workers()
+
 
 def cleanup_all_resources():
     """清理所有资源（VideoCapture等）"""
@@ -2283,6 +2376,15 @@ def main():
     for worker_id in range(1, YOLO_WORKER_THREADS + 1):
         yolo_executor.submit(yolo_detection_worker, worker_id)
         logger.info(f"   ✅ YOLO检测线程 {worker_id} 已启动")
+
+    if task_config and bool(getattr(task_config, 'face_matching_enabled', False)):
+        logger.info(
+            f"👤 启动人脸抓取独立队列: size={FACE_CAPTURE_QUEUE_SIZE}, "
+            f"workers={FACE_CAPTURE_WORKER_THREADS}"
+        )
+        start_face_capture_workers(stop_event)
+    else:
+        logger.info("👤 人脸匹配未启用，跳过人脸抓取队列")
 
     # 启动心跳上报线程
     logger.info("💓 启动心跳上报线程...")

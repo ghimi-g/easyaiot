@@ -155,6 +155,8 @@ def create_app():
     app.config['KAFKA_ALERT_TOPIC'] = os.environ.get('KAFKA_ALERT_TOPIC', 'iot-alert-notification')
     app.config['KAFKA_ALERT_NOTIFICATION_TOPIC'] = os.environ.get('KAFKA_ALERT_NOTIFICATION_TOPIC', 'iot-alert-notification')
     app.config['KAFKA_SNAPSHOT_ALERT_TOPIC'] = os.environ.get('KAFKA_SNAPSHOT_ALERT_TOPIC', 'iot-snapshot-alert')
+    app.config['KAFKA_FACE_MATCHING_TOPIC'] = os.environ.get('KAFKA_FACE_MATCHING_TOPIC', 'iot-face-matching')
+    app.config['KAFKA_FACE_MATCHING_RESULT_TOPIC'] = os.environ.get('KAFKA_FACE_MATCHING_RESULT_TOPIC', 'iot-face-matching-result')
     app.config['KAFKA_REQUEST_TIMEOUT_MS'] = int(os.environ.get('KAFKA_REQUEST_TIMEOUT_MS', '5000'))
     app.config['KAFKA_RETRIES'] = int(os.environ.get('KAFKA_RETRIES', '1'))
     app.config['KAFKA_RETRY_BACKOFF_MS'] = int(os.environ.get('KAFKA_RETRY_BACKOFF_MS', '100'))
@@ -378,6 +380,9 @@ def create_app():
                         ('last_capture_time', 'TIMESTAMP'),
                         ('face_detection_enabled', 'BOOLEAN NOT NULL DEFAULT TRUE'),
                         ('plate_detection_enabled', 'BOOLEAN NOT NULL DEFAULT TRUE'),
+                        ('face_matching_enabled', 'BOOLEAN NOT NULL DEFAULT FALSE'),
+                        ('face_library_id', 'INTEGER REFERENCES face_library(id) ON DELETE SET NULL'),
+                        ('face_matching_threshold', 'DOUBLE PRECISION'),
                         ('alert_event_suppress_time', 'INTEGER NOT NULL DEFAULT 5'),
                         ('service_server_ip', 'VARCHAR(45)'),
                         ('service_port', 'INTEGER'),
@@ -530,6 +535,47 @@ def create_app():
                     print("✅ alert/playback 字符列长度检查完成（GB28181 长设备 ID / MinIO URL）")
                 except Exception as e:
                     print(f"⚠️  alert/playback 字符列扩展失败: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    db.session.rollback()
+
+                # face_person 归一化人员表 & face_entry.person_id
+                try:
+                    result = db.session.execute(text("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables
+                            WHERE table_schema = 'public' AND table_name = 'face_person'
+                        );
+                    """))
+                    if not result.scalar():
+                        print("⚠️  face_person 表不存在，正在创建...")
+                        db.create_all()
+                        print("✅ face_person 表创建成功")
+
+                    result = db.session.execute(text("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                              AND table_name = 'face_entry'
+                              AND column_name = 'person_id'
+                        );
+                    """))
+                    if not result.scalar():
+                        print("⚠️  face_entry.person_id 列不存在，正在添加...")
+                        db.session.execute(text("""
+                            ALTER TABLE face_entry
+                            ADD COLUMN person_id INTEGER REFERENCES face_person(id) ON DELETE CASCADE;
+                        """))
+                        db.session.commit()
+                        print("✅ face_entry.person_id 列添加成功")
+
+                    from app.services import face_library_service as _face_lib_svc
+                    libs = db.session.execute(text("SELECT id FROM face_library")).fetchall()
+                    for (lib_id,) in libs:
+                        _face_lib_svc.ensure_person_records(int(lib_id))
+                    print("✅ 人脸归一化人员数据迁移检查完成")
+                except Exception as e:
+                    print(f"⚠️  人脸归一化表迁移失败: {str(e)}")
                     import traceback
                     traceback.print_exc()
                     db.session.rollback()
@@ -954,6 +1000,24 @@ def create_app():
                 replace_existing=True
             )
             print('✅ 心跳超时检查任务已启动（每分钟执行一次）')
+
+            # 人脸库自动录入任务（每 5 秒轮询一次）
+            def face_auto_enroll_tick_wrapper():
+                try:
+                    with app.app_context():
+                        from app.services.face_auto_enroll_service import tick_auto_enroll_tasks
+                        tick_auto_enroll_tasks()
+                except Exception as tick_err:
+                    logger.warning(f'人脸自动录入 tick 失败: {tick_err}')
+
+            scheduler.add_job(
+                face_auto_enroll_tick_wrapper,
+                'interval',
+                seconds=5,
+                id='face_auto_enroll_tick',
+                replace_existing=True,
+            )
+            print('✅ 人脸库自动录入任务已启动（每 5 秒执行一次）')
         except Exception as e:
             print(f"❌ 启动心跳超时检查任务失败: {str(e)}")
             import traceback

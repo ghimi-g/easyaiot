@@ -69,6 +69,31 @@ export const GB28181_ROUTE_MODULE: AppRouteRecordRaw = {
   ],
 }
 
+/** 人脸管理独立页（从人脸库列表跳转） */
+export const FACE_MANAGE_ROUTE: AppRouteRecordRaw = {
+  path: '/face-manage',
+  component: LAYOUT,
+  name: 'FaceManageLayout',
+  meta: {
+    title: '人脸管理',
+    hideMenu: true,
+    hideBreadcrumb: true,
+  },
+  children: [
+    {
+      path: ':libraryId',
+      name: 'FaceManage',
+      component: () => import('@/views/face-manage/index.vue'),
+      meta: {
+        title: '人脸管理',
+        hideMenu: true,
+        canTo: true,
+        activeMenu: 'camera/index',
+      },
+    },
+  ],
+}
+
 export const REDIRECT_ROUTE: AppRouteRecordRaw = {
   path: '/redirect',
   component: LAYOUT,

@@ -30,4 +30,6 @@ paddlepaddle==3.2.0
 paddleocr==3.2.0
 insightface
 pymilvus
+# pymilvus → environs 依赖 marshmallow.__version_info__，4.x 已移除该属性
+marshmallow>=3.13,<4
 pydub==0.25.1

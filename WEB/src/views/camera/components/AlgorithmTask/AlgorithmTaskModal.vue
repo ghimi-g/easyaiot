@@ -37,6 +37,7 @@ import {
   updateAlgorithmTask,
   type AlgorithmTask,
 } from '@/api/device/algorithm_task';
+import { listFaceLibraries } from '@/api/device/face_library';
 import { getDeviceList, getDeviceInfo, registerDevice, updateDevice } from '@/api/device/camera';
 import { getModelPage } from '@/api/device/model';
 import { notifyTemplateQueryByType } from '@/api/device/notice';
@@ -86,6 +87,7 @@ const defaultModels = [
 ];
 const modelOptions = ref<Array<{ label: string; value: number }>>([...defaultModels]);
 const modelMap = ref<Map<number, any>>(new Map()); // 存储完整的模型信息
+const faceLibraryOptions = ref<Array<{ label: string; value: number }>>([]);
 
 // 告警通知相关状态
 const notificationChannels = ref<string[]>([]); // 选中的通知渠道
@@ -336,6 +338,20 @@ const loadModels = async () => {
     console.error('加载模型列表失败', error);
     // 即使加载失败，也确保默认模型显示
     modelOptions.value = defaultModels;
+  }
+};
+
+const loadFaceLibraries = async () => {
+  try {
+    const res = await listFaceLibraries({ is_enabled: true });
+    const rows = Array.isArray(res?.data) ? res.data : (res as any) || [];
+    faceLibraryOptions.value = rows.map((item: any) => ({
+      label: `${item.name} (${item.code})`,
+      value: item.id,
+    }));
+  } catch (error) {
+    console.error('加载人脸库列表失败', error);
+    faceLibraryOptions.value = [];
   }
 };
 
@@ -606,6 +622,70 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
         (values.task_type === 'realtime' || values.task_type === 'snap') && !!values.alert_event_enabled,
     },
     {
+      field: 'face_detection_enabled',
+      label: '启用人脸检测',
+      component: 'Switch',
+      defaultValue: true,
+      componentProps: {
+        checkedChildren: '是',
+        unCheckedChildren: '否',
+      },
+      helpMessage: '开启后保留 YOLO 检测到的人脸类别',
+      ifShow: ({ values }) => values.task_type === 'realtime' || values.task_type === 'snap',
+    },
+    {
+      field: 'face_matching_enabled',
+      label: '启用人脸匹配',
+      component: 'Switch',
+      defaultValue: false,
+      componentProps: {
+        checkedChildren: '是',
+        unCheckedChildren: '否',
+      },
+      helpMessage: '开启后裁剪检测到的人脸并异步投递 Kafka 进行 1:N 匹配（默认关闭）',
+      ifShow: ({ values }) => values.task_type === 'realtime' || values.task_type === 'snap',
+    },
+    {
+      field: 'face_library_id',
+      label: '关联人脸库',
+      component: 'Select',
+      componentProps: {
+        placeholder: '请选择人脸库',
+        options: faceLibraryOptions,
+        showSearch: true,
+        allowClear: true,
+        filterOption: (input: string, option: any) =>
+          (option?.label || '').toLowerCase().includes(input.toLowerCase()),
+      },
+      ifShow: ({ values }) =>
+        (values.task_type === 'realtime' || values.task_type === 'snap') && !!values.face_matching_enabled,
+    },
+    {
+      field: 'face_matching_threshold',
+      label: '匹配阈值',
+      component: 'InputNumber',
+      componentProps: {
+        placeholder: '留空则使用人脸库默认阈值',
+        min: 0,
+        max: 1,
+        step: 0.01,
+        style: { width: '100%' },
+      },
+      ifShow: ({ values }) =>
+        (values.task_type === 'realtime' || values.task_type === 'snap') && !!values.face_matching_enabled,
+    },
+    {
+      field: 'plate_detection_enabled',
+      label: '启用车牌检测',
+      component: 'Switch',
+      defaultValue: true,
+      componentProps: {
+        checkedChildren: '是',
+        unCheckedChildren: '否',
+      },
+      ifShow: ({ values }) => values.task_type === 'realtime' || values.task_type === 'snap',
+    },
+    {
       field: 'alert_notification_enabled',
       label: '启用告警通知',
       component: 'Input',
@@ -791,7 +871,7 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
   initDefaultModels();
 
   // 加载选项数据
-  await Promise.all([loadDevices(), loadModels()]);
+  await Promise.all([loadDevices(), loadModels(), loadFaceLibraries()]);
 
   if (modalData.value.record) {
     const record = modalData.value.record;
@@ -902,6 +982,11 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       tracking_smooth_alpha: record.tracking_smooth_alpha || 0.25,
       alert_event_enabled: record.alert_event_enabled !== undefined ? record.alert_event_enabled : false,
       alert_event_suppress_time: record.alert_event_suppress_time ?? 5,
+      face_detection_enabled: record.face_detection_enabled !== undefined ? record.face_detection_enabled : true,
+      face_matching_enabled: record.face_matching_enabled === true,
+      face_library_id: record.face_library_id,
+      face_matching_threshold: record.face_matching_threshold,
+      plate_detection_enabled: record.plate_detection_enabled !== undefined ? record.plate_detection_enabled : true,
       alarm_suppress_time: record.alarm_suppress_time ?? 300,
       alert_notification_enabled: record.alert_notification_enabled !== undefined ? record.alert_notification_enabled : false,
       notification_channels: notificationChannels.value,
@@ -996,6 +1081,9 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       tracking_smooth_alpha: 0.25,
       alert_event_enabled: false, // 默认关闭告警事件
       alert_event_suppress_time: 5,
+      face_detection_enabled: true,
+      face_matching_enabled: false,
+      plate_detection_enabled: true,
       alarm_suppress_time: 300,
       notification_channels: [],
       is_full_day_defense: true, // 默认全天布防
@@ -1168,6 +1256,18 @@ const handleSubmit = async () => {
     }
 
 
+    // 人脸匹配校验
+    if (values.face_matching_enabled && !values.face_library_id) {
+      createMessage.error('启用人脸匹配时必须选择人脸库');
+      confirmLoading.value = false;
+      setDrawerProps({ confirmLoading: false });
+      return;
+    }
+    if (!values.face_matching_enabled) {
+      values.face_library_id = null;
+      values.face_matching_threshold = null;
+    }
+
     // 确保 model_ids 是数组格式
     if (values.model_ids && !Array.isArray(values.model_ids)) {
       values.model_ids = [values.model_ids];
@@ -1258,6 +1358,9 @@ const handleReset = () => {
       tracking_smooth_alpha: 0.25,
       alert_event_enabled: false, // 默认关闭告警事件
       alert_event_suppress_time: 5,
+      face_detection_enabled: true,
+      face_matching_enabled: false,
+      plate_detection_enabled: true,
       alarm_suppress_time: 300,
       is_full_day_defense: true, // 默认全天布防
     });

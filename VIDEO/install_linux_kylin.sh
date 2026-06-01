@@ -306,6 +306,26 @@ create_directories() {
     print_success "目录创建完成"
 }
 
+# 下载人脸特征提取模型（face_rec.onnx，约 167MB，不随仓库分发）
+download_face_rec_model() {
+    local target="${SCRIPT_DIR}/face_rec.onnx"
+    if [ -f "$target" ] && [ "$(stat -c%s "$target" 2>/dev/null || stat -f%z "$target" 2>/dev/null || echo 0)" -ge 10485760 ]; then
+        print_success "人脸特征模型 face_rec.onnx 已存在"
+        return 0
+    fi
+    local dl_script="${SCRIPT_DIR}/scripts/download_face_rec_model.sh"
+    if [ ! -f "$dl_script" ]; then
+        print_warning "未找到模型下载脚本，请在人脸库页面手动下载"
+        return 0
+    fi
+    print_info "下载人脸特征提取模型 face_rec.onnx（约 167MB，首次安装需联网）..."
+    if bash "$dl_script"; then
+        print_success "人脸特征模型下载完成"
+    else
+        print_warning "人脸特征模型下载失败，可在 WEB 人脸库页面手动下载"
+    fi
+}
+
 # 清理 VIDEO 服务的 compose 容器网络缓存
 clean_compose_cache() {
     print_info "清理 VIDEO 服务的 compose 容器网络缓存..."
@@ -475,6 +495,7 @@ install_service() {
     clean_compose_cache
     check_network
     create_directories
+    download_face_rec_model
     create_env_file
     prepare_cached_resources
     
