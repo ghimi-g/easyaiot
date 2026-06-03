@@ -617,23 +617,11 @@ Veuillez d'abord suivre le compte officiel ci-dessous, puis nous contacter via l
 Après avoir suivi le compte officiel, scannez les codes QR ci-dessous avec WeChat pour rejoindre le groupe d'échange technique EasyAIoT. Si un groupe est complet, essayez le suivant.
 </p>
 
-<div style="display: flex; flex-wrap: wrap; gap: 20px; margin: 20px 0;">
-  <div style="text-align: center;">
-    <img src=".image/交流群2群.jpg" alt="Groupe d'échange technique EasyAIoT 2" width="200">
-    <p style="font-size: 13px; color: #666; margin: 8px 0;">Groupe 2</p>
-  </div>
-  <div style="text-align: center;">
-    <img src=".image/交流群3群.jpg" alt="Groupe d'échange technique EasyAIoT 3" width="200">
-    <p style="font-size: 13px; color: #666; margin: 8px 0;">Groupe 3</p>
-  </div>
-  <div style="text-align: center;">
-    <img src=".image/交流群4群.jpg" alt="Groupe d'échange technique EasyAIoT 4" width="200">
-    <p style="font-size: 13px; color: #666; margin: 8px 0;">Groupe 4</p>
-  </div>
-  <div style="text-align: center;">
-    <img src=".image/交流群5群.jpg" alt="Groupe d'échange technique EasyAIoT 5" width="200">
-    <p style="font-size: 13px; color: #666; margin: 8px 0;">Groupe 5</p>
-  </div>
+<div style="display: flex; flex-wrap: nowrap; gap: 20px; margin: 20px 0;">
+  <img src=".image/交流群2群.jpg" alt="Groupe d'échange technique EasyAIoT 2" width="200">
+  <img src=".image/交流群3群.jpg" alt="Groupe d'échange technique EasyAIoT 3" width="200">
+  <img src=".image/交流群4群.jpg" alt="Groupe d'échange technique EasyAIoT 4" width="200">
+  <img src=".image/交流群5群.jpg" alt="Groupe d'échange technique EasyAIoT 5" width="200">
 </div>
 
 ## 💬 Contact WeChat

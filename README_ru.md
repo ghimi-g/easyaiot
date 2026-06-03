@@ -617,23 +617,11 @@ EasyAIoT — это проект с открытым исходным кодом
 После подписки на официальный аккаунт отсканируйте QR-коды ниже через WeChat, чтобы вступить в техническую группу EasyAIoT. Если группа заполнена, попробуйте следующую.
 </p>
 
-<div style="display: flex; flex-wrap: wrap; gap: 20px; margin: 20px 0;">
-  <div style="text-align: center;">
-    <img src=".image/交流群2群.jpg" alt="Техническая группа EasyAIoT 2" width="200">
-    <p style="font-size: 13px; color: #666; margin: 8px 0;">Группа 2</p>
-  </div>
-  <div style="text-align: center;">
-    <img src=".image/交流群3群.jpg" alt="Техническая группа EasyAIoT 3" width="200">
-    <p style="font-size: 13px; color: #666; margin: 8px 0;">Группа 3</p>
-  </div>
-  <div style="text-align: center;">
-    <img src=".image/交流群4群.jpg" alt="Техническая группа EasyAIoT 4" width="200">
-    <p style="font-size: 13px; color: #666; margin: 8px 0;">Группа 4</p>
-  </div>
-  <div style="text-align: center;">
-    <img src=".image/交流群5群.jpg" alt="Техническая группа EasyAIoT 5" width="200">
-    <p style="font-size: 13px; color: #666; margin: 8px 0;">Группа 5</p>
-  </div>
+<div style="display: flex; flex-wrap: nowrap; gap: 20px; margin: 20px 0;">
+  <img src=".image/交流群2群.jpg" alt="Техническая группа EasyAIoT 2" width="200">
+  <img src=".image/交流群3群.jpg" alt="Техническая группа EasyAIoT 3" width="200">
+  <img src=".image/交流群4群.jpg" alt="Техническая группа EasyAIoT 4" width="200">
+  <img src=".image/交流群5群.jpg" alt="Техническая группа EasyAIoT 5" width="200">
 </div>
 
 ## 💬 WeChat

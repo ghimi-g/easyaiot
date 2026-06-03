@@ -617,23 +617,11 @@ EasyAIoT是一個開源學習項目，與商業行為無關。用戶在使用該
 關注公眾號後，使用微信掃描下方二維碼加入 EasyAIoT 技術交流群。如某個群已滿無法加入，請嘗試掃描下一個群。
 </p>
 
-<div style="display: flex; flex-wrap: wrap; gap: 20px; margin: 20px 0;">
-  <div style="text-align: center;">
-    <img src=".image/交流群2群.jpg" alt="EasyAIoT技術交流2群" width="200">
-    <p style="font-size: 13px; color: #666; margin: 8px 0;">2群</p>
-  </div>
-  <div style="text-align: center;">
-    <img src=".image/交流群3群.jpg" alt="EasyAIoT技術交流3群" width="200">
-    <p style="font-size: 13px; color: #666; margin: 8px 0;">3群</p>
-  </div>
-  <div style="text-align: center;">
-    <img src=".image/交流群4群.jpg" alt="EasyAIoT技術交流4群" width="200">
-    <p style="font-size: 13px; color: #666; margin: 8px 0;">4群</p>
-  </div>
-  <div style="text-align: center;">
-    <img src=".image/交流群5群.jpg" alt="EasyAIoT技術交流5群" width="200">
-    <p style="font-size: 13px; color: #666; margin: 8px 0;">5群</p>
-  </div>
+<div style="display: flex; flex-wrap: nowrap; gap: 20px; margin: 20px 0;">
+  <img src=".image/交流群2群.jpg" alt="EasyAIoT技術交流2群" width="200">
+  <img src=".image/交流群3群.jpg" alt="EasyAIoT技術交流3群" width="200">
+  <img src=".image/交流群4群.jpg" alt="EasyAIoT技術交流4群" width="200">
+  <img src=".image/交流群5群.jpg" alt="EasyAIoT技術交流5群" width="200">
 </div>
 
 ## 💬 微信號聯系
