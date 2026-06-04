@@ -240,7 +240,8 @@ check_docker() {
     print_success "Docker 已启动"
 }
 
-# 配置 Docker 国内镜像源（与 install_middleware_linux.sh / install_linux.sh 一致）
+# 配置 Docker 国内镜像源（与 install_middleware_linux.sh 一致，使用 docker.1ms.run）
+# 注意：镜像源配置失败不应中断脚本，后续仍会尝试国内镜像站直连拉取
 configure_docker_mirror() {
     if [ "$SKIP_MIRROR" = true ]; then
         print_info "已跳过 Docker 镜像源配置 (--skip-mirror)"
@@ -250,147 +251,113 @@ configure_docker_mirror() {
     print_section "配置 Docker 国内镜像源"
 
     local docker_config_file="/etc/docker/daemon.json"
+    local docker_config_dir="/etc/docker"
+    local need_restart=false
+    local config_updated=false
 
-    if [ "$EUID" -eq 0 ]; then
-        :
-    elif command -v sudo >/dev/null 2>&1; then
-        print_info "需要 root 权限配置镜像源，将使用 sudo..."
-        run_as_root=true
-    else
-        print_warning "无 root/sudo 权限，无法写入 ${docker_config_file}"
-        print_info "请手动添加 registry-mirrors: ${DOCKER_MIRROR}"
-        print_info "然后执行: sudo systemctl restart docker"
+    if [ "$EUID" -ne 0 ]; then
+        print_warning "配置镜像源需要 root，当前非 root，跳过 daemon.json 写入"
+        print_info "可改用 root 运行，或手动添加 registry-mirrors: ${DOCKER_MIRROR}"
+        print_info "后续将尝试从 docker.1ms.run 等国内地址直连拉取镜像"
         return 0
     fi
 
-    local output_file
-    output_file=$(mktemp)
-    local py_cmd=""
-    if command -v python3 >/dev/null 2>&1; then
-        py_cmd="python3"
-    elif command -v python2 >/dev/null 2>&1; then
-        py_cmd="python2"
+    mkdir -p "$docker_config_dir"
+
+    # 已包含国内镜像源
+    if [ -f "$docker_config_file" ] && grep -q 'docker\.1ms\.run' "$docker_config_file" 2>/dev/null; then
+        print_success "Docker 镜像源已配置（${DOCKER_MIRROR}）"
+        return 0
     fi
 
-    local config_updated=false
-    local config_ok=false
-    local python_exit_code=0
-
-    if [ -n "$py_cmd" ]; then
-        local py_script
-        py_script=$(cat <<'PYEOF'
+    # 无配置文件：直接创建（与 install_linux.sh 一致）
+    if [ ! -f "$docker_config_file" ]; then
+        cat > "$docker_config_file" <<EOF
+{
+  "registry-mirrors": ["${DOCKER_MIRROR}"]
+}
+EOF
+        config_updated=true
+        print_info "已创建 ${docker_config_file}"
+    elif command -v python3 >/dev/null 2>&1; then
+        # 有配置文件时仅用 python3 合并 JSON（避免 CentOS7 python2 语法问题）
+        local py_file
+        set +e
+        py_file=$(mktemp /tmp/docker-mirror-config.XXXXXX.py 2>/dev/null)
+        set -e
+        [ -z "$py_file" ] && py_file="/tmp/docker-mirror-config.$$.py"
+        cat > "$py_file" <<'PYEOF'
 import json
 import os
 import sys
 
 config_file = os.environ["DOCKER_CONFIG_FILE"]
 mirror = os.environ["DOCKER_MIRROR"].rstrip("/") + "/"
-recommended = [mirror]
 
-config = {}
-if os.path.exists(config_file):
-    try:
-        with open(config_file, "r") as f:
-            config = json.load(f)
-    except Exception as e:
-        print("CONFIG_ERROR:读取配置文件失败: %s" % e, file=sys.stderr)
-        sys.exit(1)
+try:
+    with open(config_file, "r") as f:
+        config = json.load(f)
+except Exception as e:
+    sys.stderr.write("读取失败: %s\n" % e)
+    sys.exit(1)
 
-needs_update = False
-changes = []
-existing = config.get("registry-mirrors", [])
-if not isinstance(existing, list):
-    existing = []
+mirrors = config.get("registry-mirrors", [])
+if not isinstance(mirrors, list):
+    mirrors = []
 
-mirror_norm = mirror.rstrip("/")
-found = any(m.rstrip("/") == mirror_norm for m in existing)
-if not found:
-    existing.append(mirror)
-    config["registry-mirrors"] = existing
-    needs_update = True
-    changes.append("添加镜像源: %s" % mirror)
-
-if needs_update:
-    try:
-        os.makedirs(os.path.dirname(config_file), exist_ok=True)
-        with open(config_file, "w") as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
-        print("CONFIG_UPDATED")
-        for c in changes:
-            print("CHANGE:%s" % c)
-    except Exception as e:
-        print("CONFIG_ERROR:%s" % e, file=sys.stderr)
-        sys.exit(1)
+if not any(m.rstrip("/") == mirror.rstrip("/") for m in mirrors):
+    mirrors.append(mirror)
+    config["registry-mirrors"] = mirrors
+    with open(config_file, "w") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+    print("UPDATED")
 else:
-    print("CONFIG_OK")
+    print("OK")
 PYEOF
-)
+        set +e
+        DOCKER_CONFIG_FILE="$docker_config_file" DOCKER_MIRROR="$DOCKER_MIRROR" \
+            python3 "$py_file"
+        local py_rc=$?
+        set -e
+        rm -f "$py_file"
 
-        if [ "$EUID" -eq 0 ]; then
-            DOCKER_CONFIG_FILE="$docker_config_file" DOCKER_MIRROR="$DOCKER_MIRROR" \
-                $py_cmd -c "$py_script" > "$output_file" 2>&1
-            python_exit_code=$?
-        else
-            DOCKER_CONFIG_FILE="$docker_config_file" DOCKER_MIRROR="$DOCKER_MIRROR" \
-                sudo -E $py_cmd -c "$py_script" > "$output_file" 2>&1
-            python_exit_code=$?
-        fi
-
-        while IFS= read -r line || [ -n "$line" ]; do
-            case "$line" in
-                CONFIG_UPDATED) config_updated=true ;;
-                CONFIG_OK) config_ok=true ;;
-                CHANGE:*) print_info "配置变更: ${line#CHANGE:}" ;;
-                CONFIG_ERROR:*)
-                    print_error "配置失败: ${line#CONFIG_ERROR:}"
-                    rm -f "$output_file"
-                    return 1
-                    ;;
-            esac
-        done < "$output_file"
-        rm -f "$output_file"
-
-        if [ "$python_exit_code" -ne 0 ]; then
-            print_warning "Python 配置镜像源失败，尝试备用方式..."
-        fi
-    fi
-
-    if [ "$config_ok" != true ] && [ "$config_updated" != true ]; then
-        mkdir -p /etc/docker 2>/dev/null || sudo mkdir -p /etc/docker
-        if [ ! -f "$docker_config_file" ]; then
-            if [ "$EUID" -eq 0 ]; then
-                printf '{\n  "registry-mirrors": ["%s"]\n}\n' "$DOCKER_MIRROR" > "$docker_config_file"
-            else
-                printf '{\n  "registry-mirrors": ["%s"]\n}\n' "$DOCKER_MIRROR" | sudo tee "$docker_config_file" >/dev/null
-            fi
+        if [ "$py_rc" -eq 0 ]; then
             config_updated=true
-            print_info "已创建 ${docker_config_file}"
-        elif grep -q 'docker\.1ms\.run' "$docker_config_file" 2>/dev/null; then
-            config_ok=true
+            print_info "已向已有 daemon.json 合并镜像源"
         else
-            print_warning "请手动在 ${docker_config_file} 的 registry-mirrors 中添加: ${DOCKER_MIRROR}"
+            print_warning "无法自动合并已有 daemon.json（格式可能无效）"
+            print_info "请手动在 registry-mirrors 中添加: ${DOCKER_MIRROR}"
+            print_info "或备份后删除 ${docker_config_file} 再重新运行本脚本"
+            return 0
         fi
+    else
+        print_warning "已有 ${docker_config_file} 但未安装 python3，无法自动合并"
+        print_info "请手动添加 registry-mirrors: ${DOCKER_MIRROR}"
+        return 0
     fi
 
-    if [ "$config_ok" = true ]; then
-        print_success "Docker 镜像源已配置（${DOCKER_MIRROR}）"
-    elif [ "$config_updated" = true ]; then
+    if [ "$config_updated" = true ]; then
         print_success "Docker 镜像源已更新为 ${DOCKER_MIRROR}"
+        need_restart=true
+    fi
+
+    if [ "$need_restart" = true ]; then
         print_info "正在重启 Docker 使镜像源生效..."
-        if [ "$EUID" -eq 0 ]; then
-            systemctl daemon-reload
-            systemctl restart docker
-        else
-            sudo systemctl daemon-reload
-            sudo systemctl restart docker
-        fi
+        set +e
+        systemctl daemon-reload
+        systemctl restart docker
+        local restart_rc=$?
+        set -e
         sleep 2
-        if ! docker info >/dev/null 2>&1; then
-            print_error "Docker 重启后不可用，请检查: systemctl status docker"
-            exit 1
+        if [ "$restart_rc" -ne 0 ] || ! docker info >/dev/null 2>&1; then
+            print_warning "Docker 重启异常，请检查: systemctl status docker"
+            print_info "将继续尝试从国内镜像站直连拉取 postgres 镜像"
+            return 0
         fi
         print_success "Docker 服务已重启"
     fi
+
+    return 0
 }
 
 # 从国内镜像站拉取并 tag 为 postgres:18
@@ -648,7 +615,7 @@ main() {
     print_section "CentOS 7.9 PostgreSQL 独立启动"
     check_centos7
     check_docker
-    configure_docker_mirror
+    configure_docker_mirror || print_warning "镜像源配置未完成，将尝试直连国内镜像拉取"
     resolve_compose_cmd
     check_compose_file
     check_required_files
