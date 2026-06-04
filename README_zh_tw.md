@@ -736,21 +736,11 @@ EasyAIoT是一個開源學習項目，與商業行為無關。用戶在使用該
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">為推動 EasyAIoT 項目在設備直連接入方向的發展，貢獻多品牌 IP 攝影機資產盤點與網段掃描能力，支援海康 IPC、NVR 等設備的批量發現與識別；完善直連設備於同網段、跨網段場景下的批量搜尋與一鍵註冊流程，基於設備原生協議實現接入，可繞過海康 SDK、擺脫對海康平台的強依賴，為開放、可控的攝影機規模化接入奠定了基礎。</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;">
-<div style="display: flex; align-items: center; gap: 12px;">
-<img src=".image/sponsor/阿龙.jpg" alt="阿龙" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; flex-shrink: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.12);">
-<nobr>阿龙</nobr>
-</div>
-</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>阿龙</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">為推動 EasyAIoT 項目在地圖視覺化與空間研判方向的發展，獨立貢獻天地圖空間視覺化能力的完整程式碼實作，涵蓋國家天地圖底圖接入、攝影機與告警設備布點、地圖分布視圖、地點搜尋與座標批量匯入、告警事件自動上圖、以人/以車尋跡及行動裝置軌跡回放等核心鏈路，使平台「天地圖空間視覺化與以圖研判」能力從方案設計真正走向可落地、可使用的生產形態。</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;">
-<div style="display: flex; align-items: center; gap: 12px;">
-<img src=".image/sponsor/雨落流殇.jpg" alt="雨落流殇" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; flex-shrink: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.12);">
-<nobr>雨落流殇</nobr>
-</div>
-</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>雨落流殇</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">為推動 EasyAIoT 項目在超大規模串流媒體承載方向的發展，貢獻 SRS 與 ZLMediaKit 異構串流媒體伺服器叢集的部署架構與排程思路，提出多節點池協同、串流媒體控制面與業務層解耦、儲存與上傳流水線及節點註冊排程等可擴展方案，為平台支撐萬級路攝影機並發接入、穩定分發與彈性擴容奠定了重要的架構基礎。</td>
 </tr>
 </tbody>

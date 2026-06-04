@@ -736,21 +736,11 @@ Voici les contributeurs exceptionnels qui ont apporté une contribution signific
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">A contribué au développement de l'intégration directe des appareils EasyAIoT en fournissant un inventaire multi-marques des caméras IP et un scanner de sous-réseaux, avec découverte en masse des IPC et NVR Hikvision ; amélioration de la recherche en masse et de l'enregistrement en un clic pour les appareils connectés directement, sur le même sous-réseau ou entre sous-réseaux. L'accès s'effectue via les protocoles natifs des appareils, contournant le SDK Hikvision et réduisant la dépendance à la plateforme Hikvision — posant les bases d'une intégration ouverte et maîtrisée des caméras à grande échelle.</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;">
-<div style="display: flex; align-items: center; gap: 12px;">
-<img src=".image/sponsor/阿龙.jpg" alt="阿龙" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; flex-shrink: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.12);">
-<nobr>阿龙</nobr>
-</div>
-</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>阿龙</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Pour faire progresser EasyAIoT dans la visualisation cartographique et l'analyse spatiale, a contribué de manière indépendante à l'implémentation complète des capacités de visualisation spatiale Tianditu, couvrant l'intégration de la carte de base Tianditu nationale, le positionnement des caméras et des dispositifs d'alarme, les vues de répartition cartographique, la recherche de lieux et l'importation par lot de coordonnées, la cartographie automatique des événements d'alarme, la recherche de trajectoires par personne/véhicule et la relecture des trajectoires des appareils mobiles — faisant passer la capacité « visualisation spatiale Tianditu et analyse par carte » de la conception à une forme exploitable en production.</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;">
-<div style="display: flex; align-items: center; gap: 12px;">
-<img src=".image/sponsor/雨落流殇.jpg" alt="雨落流殇" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; flex-shrink: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.12);">
-<nobr>雨落流殇</nobr>
-</div>
-</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>雨落流殇</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Pour faire progresser EasyAIoT dans la diffusion multimédia à très grande échelle, a contribué à l'architecture de déploiement et à l'approche d'ordonnancement des clusters de serveurs multimédia hétérogènes SRS et ZLMediaKit, proposant des solutions évolutives incluant la coordination multi-pools de nœuds, le découplage du plan de contrôle multimédia et de la couche métier, les pipelines de stockage et de téléchargement, ainsi que l'enregistrement et l'ordonnancement des nœuds — posant des bases architecturales importantes pour permettre à la plateforme de prendre en charge l'accès concurrent à des dizaines de milliers de flux caméra avec une diffusion stable et une montée en charge élastique.</td>
 </tr>
 </tbody>

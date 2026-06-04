@@ -736,21 +736,11 @@ EasyAIoT — это проект с открытым исходным кодом
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Внёс вклад в развитие прямого подключения устройств EasyAIoT: инвентаризация IP-камер разных брендов и сканирование подсетей с массовым обнаружением IPC и NVR Hikvision; улучшены массовый поиск и регистрация в один клик для напрямую подключённых устройств в одной подсети и между подсетями. Доступ реализован через нативные протоколы устройств, с обходом SDK Hikvision и снижением зависимости от платформы Hikvision — заложена основа для открытого и контролируемого масштабного подключения камер.</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;">
-<div style="display: flex; align-items: center; gap: 12px;">
-<img src=".image/sponsor/阿龙.jpg" alt="阿龙" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; flex-shrink: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.12);">
-<nobr>阿龙</nobr>
-</div>
-</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>阿龙</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Внёс вклад в развитие EasyAIoT в направлении картографической визуализации и пространственного анализа, самостоятельно реализовав полный код пространственной визуализации на базе Tianditu: интеграция национальной подложки Tianditu, размещение камер и устройств оповещения, представление распределения на карте, поиск мест и пакетный импорт координат, автоматическое отображение тревожных событий на карте, отслеживание людей и транспортных средств и воспроизведение траекторий мобильных устройств — переведя возможность «пространственной визуализации Tianditu и анализа на карте» от проектирования к готовому к промышленной эксплуатации решению.</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;">
-<div style="display: flex; align-items: center; gap: 12px;">
-<img src=".image/sponsor/雨落流殇.jpg" alt="雨落流殇" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; flex-shrink: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.12);">
-<nobr>雨落流殇</nobr>
-</div>
-</td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>雨落流殇</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Внёс вклад в развитие EasyAIoT в направлении сверхкрупномасштабной доставки потокового мультимедиа, предложив архитектуру развёртывания и подход к планированию кластеров гетерогенных потоковых серверов SRS и ZLMediaKit: координация пулов узлов, разделение плоскости управления потоковым мультимедиа и бизнес-слоя, конвейеры хранения и загрузки, регистрация и планирование узлов — заложив важную архитектурную основу для одновременного подключения десятков тысяч камер со стабильной доставкой и эластичным масштабированием.</td>
 </tr>
 </tbody>
