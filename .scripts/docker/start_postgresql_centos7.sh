@@ -18,6 +18,11 @@
 #   --status        查看容器与健康状态
 #   --no-init       跳过 PostgresSQL-init 权限初始化容器
 #   --no-wait       启动后不等待 pg_isready
+#   --skip-mirror   跳过配置 Docker 国内镜像源（daemon.json）
+#   --skip-pull     跳过拉取镜像（本地已有 postgres:18 时使用）
+#
+# 国内镜像：与 install_middleware_linux.sh 一致，使用 docker.1ms.run
+# 拉取失败时会依次尝试国内镜像站直接拉取并 tag 为 postgres:18
 #
 # 默认连接信息（与 docker-compose.yml 一致）：
 #   主机: 127.0.0.1  端口: 5432
@@ -44,10 +49,14 @@ CONTAINER_NAME="postgres-server"
 INIT_CONTAINER="postgres-init"
 NETWORK_NAME="easyaiot-network"
 PG_PORT=5432
+PG_IMAGE="postgres:18"
+DOCKER_MIRROR="https://docker.1ms.run/"
 
 FORCE_OS_CHECK=false
 RUN_INIT=true
 WAIT_READY=true
+SKIP_MIRROR=false
+SKIP_PULL=false
 ACTION="start"
 
 print_info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -78,8 +87,11 @@ CentOS 7.9 单独启动 PostgreSQL 容器
   --status        查看容器状态
   --no-init       跳过权限初始化容器 PostgresSQL-init
   --no-wait       启动后不等待数据库就绪
+  --skip-mirror   跳过配置 Docker 国内镜像源
+  --skip-pull     跳过拉取镜像
 
 示例:
+  sudo ./start_postgresql_centos7.sh   # 推荐 root，可自动配置镜像源
   ./start_postgresql_centos7.sh
   ./start_postgresql_centos7.sh --restart
   sudo ./start_postgresql_centos7.sh   # 首次部署建议用 root/sudo 设置数据目录权限
@@ -115,6 +127,14 @@ parse_args() {
                 ;;
             --no-wait)
                 WAIT_READY=false
+                shift
+                ;;
+            --skip-mirror)
+                SKIP_MIRROR=true
+                shift
+                ;;
+            --skip-pull)
+                SKIP_PULL=true
                 shift
                 ;;
             *)
@@ -218,6 +238,225 @@ check_docker() {
         exit 1
     fi
     print_success "Docker 已启动"
+}
+
+# 配置 Docker 国内镜像源（与 install_middleware_linux.sh / install_linux.sh 一致）
+configure_docker_mirror() {
+    if [ "$SKIP_MIRROR" = true ]; then
+        print_info "已跳过 Docker 镜像源配置 (--skip-mirror)"
+        return 0
+    fi
+
+    print_section "配置 Docker 国内镜像源"
+
+    local docker_config_file="/etc/docker/daemon.json"
+
+    if [ "$EUID" -eq 0 ]; then
+        :
+    elif command -v sudo >/dev/null 2>&1; then
+        print_info "需要 root 权限配置镜像源，将使用 sudo..."
+        run_as_root=true
+    else
+        print_warning "无 root/sudo 权限，无法写入 ${docker_config_file}"
+        print_info "请手动添加 registry-mirrors: ${DOCKER_MIRROR}"
+        print_info "然后执行: sudo systemctl restart docker"
+        return 0
+    fi
+
+    local output_file
+    output_file=$(mktemp)
+    local py_cmd=""
+    if command -v python3 >/dev/null 2>&1; then
+        py_cmd="python3"
+    elif command -v python2 >/dev/null 2>&1; then
+        py_cmd="python2"
+    fi
+
+    local config_updated=false
+    local config_ok=false
+    local python_exit_code=0
+
+    if [ -n "$py_cmd" ]; then
+        local py_script
+        py_script=$(cat <<'PYEOF'
+import json
+import os
+import sys
+
+config_file = os.environ["DOCKER_CONFIG_FILE"]
+mirror = os.environ["DOCKER_MIRROR"].rstrip("/") + "/"
+recommended = [mirror]
+
+config = {}
+if os.path.exists(config_file):
+    try:
+        with open(config_file, "r") as f:
+            config = json.load(f)
+    except Exception as e:
+        print("CONFIG_ERROR:读取配置文件失败: %s" % e, file=sys.stderr)
+        sys.exit(1)
+
+needs_update = False
+changes = []
+existing = config.get("registry-mirrors", [])
+if not isinstance(existing, list):
+    existing = []
+
+mirror_norm = mirror.rstrip("/")
+found = any(m.rstrip("/") == mirror_norm for m in existing)
+if not found:
+    existing.append(mirror)
+    config["registry-mirrors"] = existing
+    needs_update = True
+    changes.append("添加镜像源: %s" % mirror)
+
+if needs_update:
+    try:
+        os.makedirs(os.path.dirname(config_file), exist_ok=True)
+        with open(config_file, "w") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        print("CONFIG_UPDATED")
+        for c in changes:
+            print("CHANGE:%s" % c)
+    except Exception as e:
+        print("CONFIG_ERROR:%s" % e, file=sys.stderr)
+        sys.exit(1)
+else:
+    print("CONFIG_OK")
+PYEOF
+)
+
+        if [ "$EUID" -eq 0 ]; then
+            DOCKER_CONFIG_FILE="$docker_config_file" DOCKER_MIRROR="$DOCKER_MIRROR" \
+                $py_cmd -c "$py_script" > "$output_file" 2>&1
+            python_exit_code=$?
+        else
+            DOCKER_CONFIG_FILE="$docker_config_file" DOCKER_MIRROR="$DOCKER_MIRROR" \
+                sudo -E $py_cmd -c "$py_script" > "$output_file" 2>&1
+            python_exit_code=$?
+        fi
+
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+                CONFIG_UPDATED) config_updated=true ;;
+                CONFIG_OK) config_ok=true ;;
+                CHANGE:*) print_info "配置变更: ${line#CHANGE:}" ;;
+                CONFIG_ERROR:*)
+                    print_error "配置失败: ${line#CONFIG_ERROR:}"
+                    rm -f "$output_file"
+                    return 1
+                    ;;
+            esac
+        done < "$output_file"
+        rm -f "$output_file"
+
+        if [ "$python_exit_code" -ne 0 ]; then
+            print_warning "Python 配置镜像源失败，尝试备用方式..."
+        fi
+    fi
+
+    if [ "$config_ok" != true ] && [ "$config_updated" != true ]; then
+        mkdir -p /etc/docker 2>/dev/null || sudo mkdir -p /etc/docker
+        if [ ! -f "$docker_config_file" ]; then
+            if [ "$EUID" -eq 0 ]; then
+                printf '{\n  "registry-mirrors": ["%s"]\n}\n' "$DOCKER_MIRROR" > "$docker_config_file"
+            else
+                printf '{\n  "registry-mirrors": ["%s"]\n}\n' "$DOCKER_MIRROR" | sudo tee "$docker_config_file" >/dev/null
+            fi
+            config_updated=true
+            print_info "已创建 ${docker_config_file}"
+        elif grep -q 'docker\.1ms\.run' "$docker_config_file" 2>/dev/null; then
+            config_ok=true
+        else
+            print_warning "请手动在 ${docker_config_file} 的 registry-mirrors 中添加: ${DOCKER_MIRROR}"
+        fi
+    fi
+
+    if [ "$config_ok" = true ]; then
+        print_success "Docker 镜像源已配置（${DOCKER_MIRROR}）"
+    elif [ "$config_updated" = true ]; then
+        print_success "Docker 镜像源已更新为 ${DOCKER_MIRROR}"
+        print_info "正在重启 Docker 使镜像源生效..."
+        if [ "$EUID" -eq 0 ]; then
+            systemctl daemon-reload
+            systemctl restart docker
+        else
+            sudo systemctl daemon-reload
+            sudo systemctl restart docker
+        fi
+        sleep 2
+        if ! docker info >/dev/null 2>&1; then
+            print_error "Docker 重启后不可用，请检查: systemctl status docker"
+            exit 1
+        fi
+        print_success "Docker 服务已重启"
+    fi
+}
+
+# 从国内镜像站拉取并 tag 为 postgres:18
+_pull_from_registry() {
+    local source_image="$1"
+    print_info "尝试拉取: ${source_image}"
+    if docker pull "$source_image"; then
+        docker tag "$source_image" "$PG_IMAGE" 2>/dev/null || true
+        print_success "已拉取并标记为 ${PG_IMAGE}"
+        return 0
+    fi
+    return 1
+}
+
+# 确保 postgres:18 镜像存在（优先国内源）
+ensure_postgresql_image() {
+    if [ "$SKIP_PULL" = true ]; then
+        print_info "已跳过镜像拉取 (--skip-pull)"
+        if ! docker image inspect "$PG_IMAGE" >/dev/null 2>&1; then
+            print_error "本地不存在镜像 ${PG_IMAGE}，请去掉 --skip-pull 或手动 docker pull"
+            exit 1
+        fi
+        return 0
+    fi
+
+    print_section "拉取 PostgreSQL 镜像 (${PG_IMAGE})"
+
+    if docker image inspect "$PG_IMAGE" >/dev/null 2>&1; then
+        print_success "镜像已存在: ${PG_IMAGE}"
+        return 0
+    fi
+
+    local mirrors=(
+        "${PG_IMAGE}"
+        "docker.1ms.run/library/postgres:18"
+        "docker.1ms.run/postgres:18"
+        "registry.cn-hangzhou.aliyuncs.com/library/postgres:18"
+    )
+
+    local pulled=false
+    for img in "${mirrors[@]}"; do
+        if [ "$img" = "$PG_IMAGE" ]; then
+            print_info "通过已配置的 registry-mirror 拉取 ${PG_IMAGE} ..."
+            if docker pull "$PG_IMAGE"; then
+                pulled=true
+                break
+            fi
+            print_warning "registry-mirror 拉取失败，尝试国内镜像站直连..."
+        else
+            if _pull_from_registry "$img"; then
+                pulled=true
+                break
+            fi
+        fi
+    done
+
+    if [ "$pulled" = true ] && docker image inspect "$PG_IMAGE" >/dev/null 2>&1; then
+        print_success "PostgreSQL 镜像就绪: ${PG_IMAGE}"
+        docker images "$PG_IMAGE" --format '  {{.Repository}}:{{.Tag}}  {{.Size}}'
+        return 0
+    fi
+
+    print_error "无法拉取 PostgreSQL 镜像，请检查网络或手动执行:"
+    print_info "  sudo ./start_postgresql_centos7.sh          # 自动配置 ${DOCKER_MIRROR}"
+    print_info "  docker pull docker.1ms.run/library/postgres:18 && docker tag docker.1ms.run/library/postgres:18 ${PG_IMAGE}"
+    exit 1
 }
 
 check_compose_file() {
@@ -409,9 +648,11 @@ main() {
     print_section "CentOS 7.9 PostgreSQL 独立启动"
     check_centos7
     check_docker
+    configure_docker_mirror
     resolve_compose_cmd
     check_compose_file
     check_required_files
+    ensure_postgresql_image
     ensure_network
     create_data_dirs
     check_port_conflict || print_warning "端口冲突可能导致启动失败，继续尝试..."
