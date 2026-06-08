@@ -2060,6 +2060,50 @@ check_filesystem_mount_status() {
     return 0  # 可写
 }
 
+# GPUStack 内嵌 PostgreSQL 要求 PGDATA 为 0700/0750，777 会导致 postgres 拒绝启动
+fix_gpustack_postgresql_permissions() {
+    local gpustack_pg_root="${SCRIPT_DIR}/gpustack_data/postgresql"
+    local gpustack_pg_data="${gpustack_pg_root}/data"
+
+    if [ ! -d "$gpustack_pg_data" ]; then
+        return 0
+    fi
+
+    print_info "修复 GPUStack 内嵌 PostgreSQL 数据目录权限 (0750)..."
+
+    if [ "$EUID" -eq 0 ]; then
+        [ -d "$gpustack_pg_root" ] && chmod 750 "$gpustack_pg_root" 2>/dev/null || true
+        chmod 750 "$gpustack_pg_data" 2>/dev/null || true
+    elif command -v sudo &> /dev/null; then
+        [ -d "$gpustack_pg_root" ] && sudo chmod 750 "$gpustack_pg_root" 2>/dev/null || true
+        sudo chmod 750 "$gpustack_pg_data" 2>/dev/null || true
+    else
+        [ -d "$gpustack_pg_root" ] && chmod 750 "$gpustack_pg_root" 2>/dev/null || true
+        chmod 750 "$gpustack_pg_data" 2>/dev/null || true
+    fi
+
+    print_success "GPUStack PostgreSQL 数据目录权限已设置为 0750"
+}
+
+# GPUStack 数据目录：除内嵌 PostgreSQL 外其余子目录仍用 777
+set_gpustack_data_permissions() {
+    local gpustack_dir="${SCRIPT_DIR}/gpustack_data"
+
+    mkdir -p "$gpustack_dir"
+
+    if [ "$EUID" -eq 0 ]; then
+        chmod 777 "$gpustack_dir" 2>/dev/null || true
+        find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
+    elif command -v sudo &> /dev/null; then
+        sudo chmod 777 "$gpustack_dir" 2>/dev/null || true
+        sudo find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
+    else
+        chmod 777 "$gpustack_dir" 2>/dev/null || true
+        find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
+    fi
+
+    fix_gpustack_postgresql_permissions
+}
 
 # 创建所有中间件的存储目录
 create_all_storage_directories() {
@@ -2163,8 +2207,10 @@ create_all_storage_directories() {
                     sudo chmod -R 777 "$dir_path" 2>/dev/null || true
                 fi
             else
-                # 即使没有指定 UID/GID，也设置777权限
-                if [ "$EUID" -eq 0 ]; then
+                # 即使没有指定 UID/GID，也设置777权限（GPUStack 内嵌 PG 除外）
+                if [ "$dir_path" = "${SCRIPT_DIR}/gpustack_data" ]; then
+                    set_gpustack_data_permissions
+                elif [ "$EUID" -eq 0 ]; then
                     chmod -R 777 "$dir_path" 2>/dev/null || true
                 elif command -v sudo &> /dev/null; then
                     sudo chmod -R 777 "$dir_path" 2>/dev/null || true
@@ -2194,7 +2240,9 @@ create_all_storage_directories() {
     for dir_spec in "${storage_dirs[@]}"; do
         IFS=':' read -r dir_path uid gid perms <<< "$dir_spec"
         if [ -n "$dir_path" ] && [ -d "$dir_path" ]; then
-            if [ "$EUID" -eq 0 ]; then
+            if [ "$dir_path" = "${SCRIPT_DIR}/gpustack_data" ]; then
+                set_gpustack_data_permissions
+            elif [ "$EUID" -eq 0 ]; then
                 chmod -R 777 "$dir_path" 2>/dev/null || true
             elif command -v sudo &> /dev/null; then
                 sudo chmod -R 777 "$dir_path" 2>/dev/null || true
@@ -2221,7 +2269,9 @@ create_all_storage_directories() {
     )
     for parent_dir in "${parent_dirs[@]}"; do
         if [ -d "$parent_dir" ]; then
-            if [ "$EUID" -eq 0 ]; then
+            if [ "$parent_dir" = "${SCRIPT_DIR}/gpustack_data" ]; then
+                set_gpustack_data_permissions
+            elif [ "$EUID" -eq 0 ]; then
                 chmod -R 777 "$parent_dir" 2>/dev/null || true
             elif command -v sudo &> /dev/null; then
                 sudo chmod -R 777 "$parent_dir" 2>/dev/null || true
@@ -6112,7 +6162,9 @@ restart_middleware() {
     # GPUStack Worker 注册地址
     prepare_gpustack_env
 
-    
+    # 再次确保内嵌 PostgreSQL 目录权限正确（避免 777 导致 gpustack-server 无法启动）
+    fix_gpustack_postgresql_permissions
+
     print_info "重启所有中间件服务..."
     $COMPOSE_CMD -f "$COMPOSE_FILE" restart 2>&1 | tee -a "$LOG_FILE"
     
