@@ -125,17 +125,26 @@ check_command() {
 }
 
 # 检查 Docker 是否安装
+# 单次脚本运行内只实际检测一次（DOCKER_CHECKED 守卫），避免 update 等流程里
+# check_status 末尾重复触发 docker --version，减少冗余进程与刷屏。
+DOCKER_CHECKED=0
 check_docker() {
+    [ "$DOCKER_CHECKED" = "1" ] && return 0
     if ! check_command docker; then
         print_error "Docker 未安装，请先安装 Docker"
         echo "安装指南: https://docs.docker.com/get-docker/"
         exit 1
     fi
     print_success "Docker 已安装: $(docker --version)"
+    DOCKER_CHECKED=1
 }
 
 # 检查 Docker Compose 是否安装
 check_docker_compose() {
+    # 已检测过（COMPOSE_CMD 已确定）则直接复用，避免重复执行 docker compose version
+    if [ -n "$COMPOSE_CMD" ]; then
+        return 0
+    fi
     # 先检查 docker-compose 命令
     if check_command docker-compose; then
         COMPOSE_CMD="docker-compose"
@@ -740,6 +749,13 @@ clean_service() {
 }
 
 # 更新服务
+# 性能优化（命令接口/功能不变，与 VIDEO 保持一致）：
+#   1. 业务源码经 docker-compose 卷挂载（./:/app）进容器。「仅改业务代码、依赖不变」时，
+#      update 完全跳过 docker build：git pull 后只重启容器进程即可加载新代码（秒级），
+#      把原先几十分钟的镜像重建从代码更新路径上彻底摘除。
+#   2. 仅当以下任一成立时才重建镜像：镜像不存在 / FORCE_REBUILD=1 /
+#      本次 git pull 改动了依赖或构建输入（requirements*.txt、Dockerfile、docker-entrypoint.sh）。
+#   3. 需要构建时复用 BuildKit 层缓存 + 离线 pip 缓存（build_with_cache 已内置 prepare）。
 update_service() {
     print_info "更新服务..."
     check_docker
@@ -747,27 +763,83 @@ update_service() {
     detect_architecture
     configure_architecture
     check_network
-    prepare_cached_resources
-    
+
+    # 记录更新前代码版本，用于判断依赖/构建文件是否变化
+    local rev_before=""
+    rev_before="$(git rev-parse HEAD 2>/dev/null || echo "")"
+
     print_info "拉取最新代码..."
-    git pull || print_warning "Git pull 失败，继续使用当前代码"
-    
-    print_info "重新构建镜像（优先复用离线 pip 缓存）..."
-    print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $BASE_IMAGE"
-    print_warning "构建可能需要较长时间（10-30分钟），请耐心等待..."
-    print_info "正在构建镜像..."
-    print_info "构建进度将实时显示，请勿中断..."
-    echo ""
-    
-    if ! build_with_cache ""; then
-        exit 1
+    # --ff-only：快进失败立即返回，不产生意外合并提交，比默认 pull 更快更安全
+    git pull --ff-only || print_warning "Git pull 失败，继续使用当前代码"
+
+    local rev_after=""
+    rev_after="$(git rev-parse HEAD 2>/dev/null || echo "")"
+
+    # ---- 判断是否需要重建镜像 ----
+    local needs_build=0
+    if ! docker image inspect ai-service:latest >/dev/null 2>&1; then
+        needs_build=1
+        print_info "镜像不存在，需要构建"
+    elif [ "${FORCE_REBUILD:-0}" = "1" ]; then
+        needs_build=1
+        print_info "FORCE_REBUILD=1，强制重建镜像"
+    elif [ -z "$rev_before" ]; then
+        # 无法获取 git 版本（无法判断变化），保守重建
+        needs_build=1
+        print_warning "无法获取 git 版本信息，保守起见重建镜像"
+    elif [ "$rev_before" != "$rev_after" ]; then
+        # 比较本次更新是否改动依赖/构建输入文件。
+        # 注意：git diff --name-only 仅在「出错」时返回非 0（有无差异都返回 0），
+        # 故可据返回码区分「确无变化」与「无法判断」；用 || 捕获以避开 set -e。
+        local dep_changes dep_diff_rc=0
+        dep_changes="$(git diff --name-only "$rev_before" "$rev_after" -- \
+            requirements.txt requirements-base.txt requirements-docker.txt \
+            Dockerfile docker-entrypoint.sh 2>/dev/null)" || dep_diff_rc=$?
+        if [ "$dep_diff_rc" -ne 0 ]; then
+            needs_build=1
+            print_warning "无法比较依赖变化（git diff 失败），保守起见重建镜像"
+        elif [ -n "$dep_changes" ]; then
+            needs_build=1
+            print_info "检测到依赖/构建文件变化，需要重建镜像："
+            echo "$dep_changes" | sed 's/^/    /'
+        fi
     fi
-    echo ""
-    print_success "AI 服务镜像构建完成！"
-    
-    print_info "重启服务..."
-    $COMPOSE_CMD up -d --quiet-pull 2>&1 | grep -v "^Creating\|^Starting\|^Pulling\|^Waiting\|^Container" || true
-    
+
+    if [ "$needs_build" = "1" ]; then
+        print_info "重新构建镜像（复用 BuildKit 层缓存 + 离线 pip 缓存）..."
+        print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $BASE_IMAGE"
+        print_warning "构建可能需要较长时间（10-30分钟），请耐心等待..."
+        echo ""
+        if ! build_with_cache ""; then
+            exit 1
+        fi
+        echo ""
+        print_success "AI 服务镜像构建完成！"
+        print_info "应用新镜像（仅重建变更服务，最小化停机）..."
+        $COMPOSE_CMD up -d --no-deps --quiet-pull ai-service 2>&1 | grep -v "^Creating\|^Starting\|^Pulling\|^Waiting\|^Container" || true
+    else
+        print_success "依赖未变，跳过镜像构建（业务代码经卷挂载，重启进程即可生效）"
+        # 确保容器存在并应用任何 compose 配置变更（首次启用源码挂载时会在此处重建一次）
+        $COMPOSE_CMD up -d --no-deps --quiet-pull ai-service 2>&1 | grep -v "^Creating\|^Starting\|^Pulling\|^Waiting\|^Container" || true
+
+        # 是否需要重启进程以加载新源码：有新提交，或本地有未提交改动（git diff 脏）。
+        # git diff --quiet HEAD 仅在出错或有已跟踪改动时返回非 0，用于捕获“改了代码没 commit”的场景；
+        # 不受未跟踪文件干扰。出错时按“脏”处理（重启代价仅数秒，宁可多重启）。
+        local code_changed=0
+        if [ -n "$rev_before" ] && [ "$rev_before" != "$rev_after" ]; then
+            code_changed=1
+        elif ! git diff --quiet HEAD -- . 2>/dev/null; then
+            code_changed=1
+        fi
+
+        if [ "$code_changed" = "1" ]; then
+            print_info "重启容器进程以加载最新源码（秒级）..."
+            $COMPOSE_CMD restart ai-service 2>&1 | grep -v "^Restarting" || true
+        else
+            print_info "代码无变更，无需重启"
+        fi
+    fi
+
     print_success "服务更新完成"
     check_status
 }

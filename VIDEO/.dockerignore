@@ -36,6 +36,12 @@ temp_uploads/
 model/
 alert_images/
 
+# 仅排除 167MB 的 face_rec.onnx（非 git 跟踪、单独卷挂载 ./face_rec.onnx:/app/face_rec.onnx）：
+# 它若进构建上下文会每次拖慢 build。
+# 切勿用 *.onnx —— face_det.onnx / plate_detect.onnx / plate_rec.onnx 是 git 跟踪且被
+# 人脸/车牌识别代码依赖（app/utils/face_model_paths.py 等），需保留在镜像内以保证镜像自包含。
+face_rec.onnx
+
 # 测试媒体文件
 video/
 

@@ -8,6 +8,12 @@ services:
     user: root
     # runtime: nvidia  # 由 install_linux.sh 检测到 GPU 后自动启用
 
+    # 业务源码经卷挂载（见下方 volumes 的 ./:/app）后，用 sh 调用入口脚本，
+    # 这样宿主机 docker-entrypoint.sh 即使没有可执行位也能正常启动。
+    # 注意：覆盖 entrypoint 会重置镜像 CMD，故必须同时显式声明 command。
+    entrypoint: ["/bin/sh", "/app/docker-entrypoint.sh"]
+    command: ["python", "run.py"]
+
     # 环境变量文件（用于Docker部署）
     env_file:
       - .env.docker
@@ -18,6 +24,9 @@ services:
 
     # 数据卷挂载
     volumes:
+      # 业务源码（实现「仅改代码、依赖不变」时 update 免重建镜像：git pull 后重启进程即生效）
+      # 下方更具体的子目录挂载（./data 等）会按路径深度优先覆盖此挂载，互不冲突
+      - ./:/app
       # 数据目录（包含数据集、模型、推理结果、上传文件）
       - ./data:/app/data
       # 静态文件目录
@@ -45,6 +54,9 @@ services:
     environment:
       # Python环境
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
+      # 源码经 ./:/app 卷挂载且容器以 root 运行，禁止写 .pyc，避免 root 属主的
+      # __pycache__ 污染宿主机源码树（否则可能干扰后续 git 操作）
+      - PYTHONDONTWRITEBYTECODE=1
       # Flask配置
       - FLASK_RUN_PORT=${FLASK_RUN_PORT:-6000}
       - FLASK_RUN_HOST=${FLASK_RUN_HOST:-0.0.0.0}

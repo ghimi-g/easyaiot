@@ -18,6 +18,22 @@ WEB/docker-build-logs/** -diff
 # ZLMediaKit 运行时配置：不参与 diff
 .scripts/zlmediakit/conf/config.ini -diff
 
+# ── Linux 部署相关文本文件强制 LF ──
+# 这些文件在 Linux 上被执行 / 解析，带 \r(CRLF) 会出问题（即使在 Windows 上编辑提交也会被规范化为 LF）：
+#   *.sh           脚本：#!/bin/bash\r 会“无法执行：找不到需要的文件”；
+#                  其中 docker-entrypoint.sh 卷挂载进容器后带 \r 会导致容器启动失败
+#   Dockerfile*    RUN 指令里混入 \r 可能导致命令异常
+#   *.yaml/*.yml   docker-compose 等配置
+#   .dockerignore  "face_rec.onnx\r" 这类带 \r 的模式会匹配失效，导致排除规则失灵
+#   env.example    会被 install 脚本 cp 成 .env.docker，\r 会污染环境变量值（如 localhost\r）
+*.sh           text eol=lf
+Dockerfile     text eol=lf
+Dockerfile.*   text eol=lf
+*.yaml         text eol=lf
+*.yml          text eol=lf
+.dockerignore  text eol=lf
+env.example    text eol=lf
+
 *.png binary
 *.jpg binary
 *.mp4 binary

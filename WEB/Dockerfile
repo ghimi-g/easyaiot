@@ -25,17 +25,20 @@ RUN --mount=type=cache,target=/pnpm/store,id=web-pnpm-store \
     pnpm config set store-dir /pnpm/store && \
     pnpm fetch --frozen-lockfile 2>&1 | tee /tmp/web-build-logs/pnpm-fetch.log || true
 
+# 依赖安装只依赖 package.json / pnpm-lock.yaml / pnpm-workspace.yaml（已在上方 COPY）。
+# 放在 COPY 源码之前 → 仅改业务代码时此层命中缓存，不再重复 pnpm install（省下每次更新的安装耗时）。
+# 本仓库无 workspace 子包、无依赖源码的 postinstall，故先于源码安装是安全的；
+# 安装后用 cross-env 探针确认 node_modules 完整，不完整则立即失败。
+RUN --mount=type=cache,target=/pnpm/store,id=web-pnpm-store \
+    pnpm config set store-dir /pnpm/store && \
+    pnpm install --frozen-lockfile 2>&1 | tee /tmp/web-build-logs/pnpm-install.log && \
+    test -x node_modules/.bin/cross-env || (echo "=== pnpm install 未生成 node_modules/.bin/cross-env ===" && exit 1)
+
 # 源码变更或 install_linux.sh clean 后通过 CACHE_BUST 使后续层失效（避免命中 CACHED 跳过 pnpm build）
 ARG CACHE_BUST=0
 RUN echo "cache-bust=${CACHE_BUST}" > /tmp/.web-cache-bust
 
 COPY . .
-
-# 必须在 COPY 源码后 install，否则 node_modules 不完整（cross-env not found）
-RUN --mount=type=cache,target=/pnpm/store,id=web-pnpm-store \
-    pnpm config set store-dir /pnpm/store && \
-    pnpm install --frozen-lockfile 2>&1 | tee /tmp/web-build-logs/pnpm-install.log && \
-    test -x node_modules/.bin/cross-env || (echo "=== pnpm install 未生成 node_modules/.bin/cross-env ===" && exit 1)
 
 # vite 打包通常需数分钟；用 tee 同时写日志，避免终端长时间无输出像卡住
 RUN --mount=type=cache,target=/pnpm/store,id=web-pnpm-store \

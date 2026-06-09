@@ -61,17 +61,26 @@ check_command() {
 }
 
 # 检查 Docker 是否安装
+# 单次脚本运行内只实际检测一次（DOCKER_CHECKED 守卫），避免 update 等流程里
+# check_status 末尾重复触发 docker --version，减少冗余进程与刷屏。
+DOCKER_CHECKED=0
 check_docker() {
+    [ "$DOCKER_CHECKED" = "1" ] && return 0
     if ! check_command docker; then
         print_error "Docker 未安装，请先安装 Docker"
         echo "安装指南: https://docs.docker.com/get-docker/"
         exit 1
     fi
     print_success "Docker 已安装: $(docker --version)"
+    DOCKER_CHECKED=1
 }
 
 # 检查 Docker Compose 是否安装
 check_docker_compose() {
+    # 已检测过（COMPOSE_CMD 已确定）则直接复用，避免重复执行 docker compose version
+    if [ -n "$COMPOSE_CMD" ]; then
+        return 0
+    fi
     if ! check_command docker-compose && ! docker compose version &> /dev/null; then
         print_error "Docker Compose 未安装，请先安装 Docker Compose"
         echo "安装指南: https://docs.docker.com/compose/install/"
@@ -119,12 +128,21 @@ docker_build_image() {
     local pnpm_store
     pnpm_store="$(pnpm_store_dir "$EASYAIOT_ROOT")"
     mkdir -p "${pnpm_store}"
-    # BuildKit bind mount 的 rw 写入不会回写宿主机；用 local cache 后端持久化 pnpm store
+    # 构建层缓存策略：
+    # 默认依赖 Docker 守护进程自身的层缓存——稳定运行的服务器上，pnpm fetch/install 等重层会持续命中
+    # （CACHED），无需每次再做 type=local 全量导出。实测 --cache-to mode=max 每次额外耗时数分钟
+    # （日志 #27 exporting cache，仅 preparing 就 ~245s），且 CACHE_BUST 之后的层下次也用不上，纯浪费。
+    # 易失/CI 环境（构建后守护进程缓存会被清理、或换机器）可设 WEB_PERSIST_BUILD_CACHE=1 重新启用持久化。
     local cache_from_to=()
-    if [ -d "${pnpm_store}" ] && [ "$(find "${pnpm_store}" -mindepth 1 -print -quit 2>/dev/null)" ]; then
-        cache_from_to+=(--cache-from "type=local,src=${pnpm_store}")
+    if [ "${WEB_PERSIST_BUILD_CACHE:-0}" = "1" ]; then
+        if [ -d "${pnpm_store}" ] && [ "$(find "${pnpm_store}" -mindepth 1 -print -quit 2>/dev/null)" ]; then
+            cache_from_to+=(--cache-from "type=local,src=${pnpm_store}")
+        fi
+        cache_from_to+=(--cache-to "type=local,dest=${pnpm_store},mode=max")
+        print_info "持久化构建缓存到 ${pnpm_store}（WEB_PERSIST_BUILD_CACHE=1，会增加每次构建的导出耗时）"
+    else
+        print_info "使用 Docker 守护进程层缓存（默认）；如需跨守护进程清理/换机器持久化：WEB_PERSIST_BUILD_CACHE=1"
     fi
-    cache_from_to+=(--cache-to "type=local,dest=${pnpm_store},mode=max")
     docker build \
         "${cache_from_to[@]}" \
         --build-arg "CACHE_BUST=${cache_bust}" \
@@ -695,21 +713,53 @@ clean_service() {
 }
 
 # 更新服务
+# 性能优化要点（命令接口/功能保持不变）：
+#   1. 前端是编译型产物（容器内 pnpm build → 静态 dist 由 nginx 提供），代码变更必须
+#      重新编译，无法像 AI/VIDEO 那样卷挂载源码免构建。
+#   2. 但「代码无变更」时（git pull 显示 Already up to date 的常见场景）可整段跳过构建，
+#      省掉 Vite 打包（Dockerfile 标注约 2–10 分钟）。可用 FORCE_REBUILD=1 强制重建。
+#   3. 需要构建时仍复用 .build-cache/web/pnpm-store 依赖缓存（docker_build_image 已内置），
+#      pnpm fetch/install 走缓存，仅 Vite 编译重跑；且构建期旧容器持续运行，停机最小化。
 update_service() {
     print_info "更新服务..."
     check_docker
     check_docker_compose
-    
+
+    # 记录更新前代码版本，用于判断是否需要重建
+    local rev_before=""
+    rev_before="$(git rev-parse HEAD 2>/dev/null || echo "")"
+
     print_info "拉取最新代码..."
-    git pull || print_warning "Git pull 失败，继续使用当前代码"
-    
+    # --ff-only：快进失败立即返回，不产生意外合并提交，比默认 pull 更快更安全
+    git pull --ff-only || print_warning "Git pull 失败，继续使用当前代码"
+
+    local rev_after=""
+    rev_after="$(git rev-parse HEAD 2>/dev/null || echo "")"
+
+    # 无变更快速路径：提交号未变 + 本地无未提交改动 + 镜像已存在 → 跳过前端重建
+    # 说明1：clean 会删除镜像并刷新构建戳，故 clean 后镜像不存在 → 此处不会误跳过
+    # 说明2：git diff --quiet HEAD 捕获「已跟踪文件的本地未提交修改」，避免改了代码没 commit
+    #        却被误判为无变更而跳过重建（git diff 不受未跟踪的构建日志干扰）。
+    #        注意：全新的未跟踪文件 git diff 检测不到，这种情况请先 git add，或用 FORCE_REBUILD=1。
+    if [ "${FORCE_REBUILD:-0}" != "1" ] \
+        && docker image inspect web-service:latest >/dev/null 2>&1 \
+        && [ -n "$rev_before" ] && [ "$rev_before" = "$rev_after" ] \
+        && git diff --quiet HEAD -- . 2>/dev/null; then
+        print_success "代码无变更且镜像已存在，跳过前端重建"
+        print_info "（如需强制重建：FORCE_REBUILD=1 ./install_linux.sh update）"
+        $COMPOSE_CMD up -d
+        check_status
+        return 0
+    fi
+
     # 注意：前端构建现在在Docker容器内完成，重新构建镜像时会自动完成
-    print_info "重新构建镜像（前端构建将在容器内自动完成）..."
+    print_info "重新构建镜像（前端构建将在容器内自动完成，复用 pnpm-store 依赖缓存）..."
     docker_build_image -t web-service:latest .
-    
-    print_info "重启服务..."
+
+    # 构建完成后才 up -d（旧容器在 build 全程持续运行），停机仅数秒
+    print_info "应用新镜像..."
     $COMPOSE_CMD up -d
-    
+
     print_success "服务更新完成"
     check_status
 }
