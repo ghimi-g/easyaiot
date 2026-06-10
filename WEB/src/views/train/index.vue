@@ -12,7 +12,7 @@
           <ModelList />
         </TabPane>
         <TabPane key="6" tab="模型训练">
-          <TrainTaskList></TrainTaskList>
+          <TrainTaskList :tab-active="state.activeKey === '6'" />
         </TabPane>
         <TabPane key="2" tab="模型推理">
           <AiModelTool :initialLLMId="initialLLMId"></AiModelTool>

@@ -230,6 +230,32 @@ def _get_project_root() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
 
+def _safe_remove_path(path: str) -> None:
+    """删除本地文件或目录；路径不存在时静默跳过。"""
+    if not path or not os.path.exists(path):
+        return
+    if os.path.isfile(path) or os.path.islink(path):
+        os.remove(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path)
+
+
+def _cleanup_train_task_artifacts(record: TrainTask) -> None:
+    """清理训练任务关联的本地文件（数据集工作区、断点权重等）。"""
+    model_dir = os.path.join(_get_project_root(), 'data', 'datasets', f'train_{record.id}')
+    _safe_remove_path(model_dir)
+
+    # checkpoint_dir 实际存的是 last.pt 文件路径，不是目录
+    _safe_remove_path((record.checkpoint_dir or '').strip())
+
+    for extra in (record.train_log, record.metrics_path):
+        if not extra:
+            continue
+        extra = extra.strip()
+        if os.path.isabs(extra) and os.path.exists(extra):
+            _safe_remove_path(extra)
+
+
 def _parse_train_hyperparameters(hp_text: str) -> dict:
     if not hp_text:
         return {}
@@ -396,14 +422,7 @@ def delete_train(record_id):
     try:
         record = TrainTask.query.get_or_404(record_id)
 
-        if record.train_log and os.path.exists(record.train_log):
-            os.remove(record.train_log)
-
-        if record.checkpoint_dir and os.path.exists(record.checkpoint_dir):
-            shutil.rmtree(record.checkpoint_dir)
-
-        if record.metrics_path and os.path.exists(record.metrics_path):
-            os.remove(record.metrics_path)
+        _cleanup_train_task_artifacts(record)
 
         db.session.delete(record)
         db.session.commit()

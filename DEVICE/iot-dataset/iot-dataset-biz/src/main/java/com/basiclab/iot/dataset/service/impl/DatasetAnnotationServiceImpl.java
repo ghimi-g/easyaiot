@@ -14,6 +14,7 @@ import com.basiclab.iot.dataset.service.DatasetImageService;
 import com.basiclab.iot.dataset.service.DatasetService;
 import com.basiclab.iot.dataset.service.DatasetTagService;
 import com.basiclab.iot.dataset.service.annotation.DatasetAnnotationParseUtil;
+import com.basiclab.iot.dataset.service.annotation.YoloLabelContentBuilder;
 import com.basiclab.iot.dataset.service.ImportCancelChecker;
 import com.basiclab.iot.dataset.service.ImportCancelledException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -100,7 +101,9 @@ public class DatasetAnnotationServiceImpl implements DatasetAnnotationService {
             throw exception(DATASET_NO_IMAGES);
         }
 
-        Map<String, String> shortcutToName = buildShortcutToNameMap(datasetId);
+        List<DatasetTagDO> datasetTags = datasetTagService.listTagsByDatasetId(datasetId);
+        Map<String, String> shortcutToName = YoloLabelContentBuilder.buildShortcutToName(datasetTags);
+        Map<String, String> nameToShortcut = YoloLabelContentBuilder.buildNameToShortcut(datasetTags);
         List<DatasetImageDO> train;
         List<DatasetImageDO> val;
         List<DatasetImageDO> test;
@@ -137,15 +140,15 @@ public class DatasetAnnotationServiceImpl implements DatasetAnnotationService {
             for (String name : selectedClasses) {
                 namesYaml.append("  - ").append(MAPPER.writeValueAsString(name)).append('\n');
             }
-            String dataYaml = "path: .\ntrain: train/images\nval: val/images\ntest: test/images\n\nnc: "
+            String dataYaml = "train: train/images\nval: val/images\ntest: test/images\n\nnc: "
                     + selectedClasses.size() + '\n' + namesYaml;
             writeZipEntry(zos, "data.yaml", dataYaml.getBytes(StandardCharsets.UTF_8));
             writeZipEntry(zos, "classes.txt", String.join("\n", selectedClasses).getBytes(StandardCharsets.UTF_8));
 
             String prefix = Optional.ofNullable(reqVO.getExportPrefix()).orElse("").trim();
-            writeSplit(zos, "train", train, classToId, selectedClasses, shortcutToName, prefix);
-            writeSplit(zos, "val", val, classToId, selectedClasses, shortcutToName, prefix);
-            writeSplit(zos, "test", test, classToId, selectedClasses, shortcutToName, prefix);
+            writeSplit(zos, "train", train, classToId, shortcutToName, nameToShortcut, prefix);
+            writeSplit(zos, "val", val, classToId, shortcutToName, nameToShortcut, prefix);
+            writeSplit(zos, "test", test, classToId, shortcutToName, nameToShortcut, prefix);
             zos.finish();
         }
     }
@@ -569,31 +572,22 @@ public class DatasetAnnotationServiceImpl implements DatasetAnnotationService {
     }
 
     private void writeSplit(ZipOutputStream zos, String split, List<DatasetImageDO> images,
-                            Map<String, Integer> classToId, List<String> selectedClasses,
-                            Map<String, String> shortcutToName, String prefix) throws IOException {
+                            Map<String, Integer> classToId,
+                            Map<String, String> shortcutToName, Map<String, String> nameToShortcut,
+                            String prefix) throws IOException {
         for (DatasetImageDO image : images) {
             try {
                 byte[] imgBytes = readImageBytesFromMinio(image.getPath());
                 String flat = image.getName().replace("\\", "/").replace("/", "__");
                 String imgName = prefix.isEmpty() ? flat : prefix + "_" + flat;
                 writeZipEntry(zos, split + "/images/" + imgName, imgBytes);
-                String label = buildYoloLabelContent(image, classToId, selectedClasses, shortcutToName);
+                String label = buildYoloLabelContent(image, classToId, shortcutToName, nameToShortcut);
                 String labelName = stripExt(imgName) + ".txt";
                 writeZipEntry(zos, split + "/labels/" + labelName, label.getBytes(StandardCharsets.UTF_8));
             } catch (Exception e) {
                 logger.warn("导出图片失败: {}", image.getName(), e);
             }
         }
-    }
-
-    private Map<String, String> buildShortcutToNameMap(Long datasetId) {
-        Map<String, String> shortcutToName = new HashMap<>();
-        Map<String, String> nameToShortcut = DatasetAnnotationParseUtil.nameToShortcutFromTags(
-                datasetTagService.listTagsByDatasetId(datasetId));
-        for (Map.Entry<String, String> entry : nameToShortcut.entrySet()) {
-            shortcutToName.put(entry.getValue(), entry.getKey());
-        }
-        return shortcutToName;
     }
 
     private boolean isUsageAllocated(List<DatasetImageDO> images) {
@@ -605,44 +599,15 @@ public class DatasetAnnotationServiceImpl implements DatasetAnnotationService {
     }
 
     private String buildYoloLabelContent(DatasetImageDO image, Map<String, Integer> classToId,
-                                         List<String> selectedClasses, Map<String, String> shortcutToName) {
-        if (image.getAnnotations() == null || image.getAnnotations().isBlank()) return "";
-        try {
-            List<Map<String, Object>> anns = MAPPER.readValue(image.getAnnotations(), new TypeReference<>() {});
-            StringBuilder sb = new StringBuilder();
-            int w = image.getWidth() != null && image.getWidth() > 0 ? image.getWidth() : 1;
-            int h = image.getHeigh() != null && image.getHeigh() > 0 ? image.getHeigh() : 1;
-            for (Map<String, Object> ann : anns) {
-                String rawLabel = String.valueOf(ann.getOrDefault("label", ann.getOrDefault("class", ""))).trim();
-                if (rawLabel.isEmpty()) continue;
-                String labelName = shortcutToName.getOrDefault(rawLabel, rawLabel);
-                if (!selectedClasses.contains(labelName) || !classToId.containsKey(labelName)) continue;
-                List<Map<String, Object>> points = (List<Map<String, Object>>) ann.get("points");
-                if (points == null || points.size() < 4) continue;
-                double minX = 1, minY = 1, maxX = 0, maxY = 0;
-                for (Map<String, Object> p : points) {
-                    double x = toDouble(p.get("x"));
-                    double y = toDouble(p.get("y"));
-                    if (x <= 1.01 && y <= 1.01) { /* normalized */ } else {
-                        x /= w;
-                        y /= h;
-                    }
-                    minX = Math.min(minX, x);
-                    minY = Math.min(minY, y);
-                    maxX = Math.max(maxX, x);
-                    maxY = Math.max(maxY, y);
-                }
-                double cx = (minX + maxX) / 2;
-                double cy = (minY + maxY) / 2;
-                double bw = maxX - minX;
-                double bh = maxY - minY;
-                sb.append(String.format(Locale.US, "%d %.6f %.6f %.6f %.6f\n",
-                        classToId.get(labelName), cx, cy, bw, bh));
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            return "";
-        }
+                                         Map<String, String> shortcutToName,
+                                         Map<String, String> nameToShortcut) {
+        return YoloLabelContentBuilder.build(
+                image.getAnnotations(),
+                classToId,
+                shortcutToName,
+                nameToShortcut,
+                image.getWidth(),
+                image.getHeigh());
     }
 
     private void saveImageBytes(Long datasetId, byte[] fileData, String originalFilename,

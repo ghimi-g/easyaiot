@@ -95,7 +95,7 @@
 </template>
 
 <script lang="ts" setup>
-import {nextTick, ref} from 'vue';
+import {computed, nextTick, onUnmounted, ref, watch} from 'vue';
 import {SwapOutlined} from '@ant-design/icons-vue';
 import {BasicTable, TableAction, useTable} from '@/components/Table';
 import {useMessage} from '@/hooks/web/useMessage';
@@ -114,11 +114,28 @@ import {resolveTrainResultsDisplayUrl} from '@/utils/alertMinioImage';
 import { Button } from '@/components/Button'
 defineOptions({name: 'TrainTaskList'});
 
+const props = withDefaults(defineProps<{
+  /** 模型训练 Tab 是否处于激活状态 */
+  tabActive?: boolean;
+}>(), {
+  tabActive: true,
+});
+
 const {createMessage} = useMessage();
+
+const POLL_INTERVAL_MS = 10_000;
+const ACTION_REFRESH_DELAY_MS = 2_000;
 
 const viewMode = ref<'table' | 'card'>('card');
 const params = {};
-let cardListReload = () => {};
+const latestRecords = ref<Record<string, unknown>[]>([]);
+let cardListReload: (opts?: { silent?: boolean }) => void = () => {};
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let actionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+const hasActiveTrainingTasks = computed(() =>
+  latestRecords.value.some((record) => isTrainTaskActive(String(record.status))),
+);
 
 const showLogsModal = ref(false);
 const showResultsModal = ref(false);
@@ -140,12 +157,57 @@ function handleToggleViewMode() {
   }
 }
 
-function handleSuccess() {
+function updateLatestRecords(records: unknown) {
+  latestRecords.value = Array.isArray(records) ? records as Record<string, unknown>[] : [];
+}
+
+async function refreshList(opts?: { silent?: boolean }) {
   if (viewMode.value === 'table') {
-    reload({page: 0});
-  } else {
-    cardListReload();
+    await reload();
+    return;
   }
+  await cardListReload(opts);
+}
+
+function stopAutoRefresh() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function syncAutoRefresh() {
+  stopAutoRefresh();
+  if (!props.tabActive || !hasActiveTrainingTasks.value) {
+    return;
+  }
+  pollTimer = setInterval(() => {
+    if (!props.tabActive) {
+      stopAutoRefresh();
+      return;
+    }
+    void refreshList({silent: true}).then(() => {
+      if (!hasActiveTrainingTasks.value) {
+        stopAutoRefresh();
+      }
+    });
+  }, POLL_INTERVAL_MS);
+}
+
+function scheduleActionRefresh() {
+  if (actionRefreshTimer) {
+    clearTimeout(actionRefreshTimer);
+  }
+  actionRefreshTimer = setTimeout(() => {
+    actionRefreshTimer = null;
+    void refreshList({silent: true}).then(() => syncAutoRefresh());
+  }, ACTION_REFRESH_DELAY_MS);
+}
+
+async function handleSuccess() {
+  await refreshList();
+  syncAutoRefresh();
+  scheduleActionRefresh();
 }
 
 let datasetUrlMap: Record<string, { name: string; version: string }> | null = null;
@@ -282,6 +344,9 @@ async function fetchTrainTasks(params: Record<string, unknown>) {
   const records = result?.data ?? result?.list ?? [];
   if (Array.isArray(records)) {
     enrichTrainTaskRecords(records);
+    updateLatestRecords(records);
+  } else {
+    updateLatestRecords([]);
   }
   return result;
 }
@@ -373,7 +438,7 @@ const handleStartTrain = async (config) => {
       createMessage.success(
         response.msg || (isResume ? '训练已继续' : isRetrain ? '重新训练已启动' : '训练已启动'),
       );
-      handleSuccess();
+      await handleSuccess();
     } else {
       createMessage.error(
         response?.msg || (isResume ? '继续训练失败' : isRetrain ? '重新训练失败' : '启动训练失败'),
@@ -395,7 +460,7 @@ const handleStopTrain = async (record) => {
     const response = await stopTrain(record.id);
     if (response && (response.code === 0 || response.success === true)) {
       createMessage.success(response.msg || '已发送停止请求，将在当前 epoch 结束后保存断点');
-      handleSuccess();
+      await handleSuccess();
     } else {
       createMessage.error(response?.msg || '暂停训练失败');
     }
@@ -483,7 +548,7 @@ const handleDelete = async (record) => {
     const response = await deleteTrainTask(record.id);
     if (response && (response.code === 0 || response.success === true)) {
       createMessage.success(response.msg || '删除成功');
-      handleSuccess();
+      await handleSuccess();
     } else {
       createMessage.error(response?.msg || '删除失败');
     }
@@ -507,6 +572,28 @@ const handleOpenTrainLogsModal = (record) => {
 const handleLogsModalClose = () => {
   showLogsModal.value = false;
 };
+
+watch(() => props.tabActive, (active) => {
+  if (active) {
+    void refreshList({silent: true}).then(() => syncAutoRefresh());
+  } else {
+    stopAutoRefresh();
+  }
+});
+
+watch(hasActiveTrainingTasks, () => {
+  if (props.tabActive) {
+    syncAutoRefresh();
+  }
+});
+
+onUnmounted(() => {
+  stopAutoRefresh();
+  if (actionRefreshTimer) {
+    clearTimeout(actionRefreshTimer);
+    actionRefreshTimer = null;
+  }
+});
 
 const [registerTable, {reload}] = useTable({
   canResize: true,

@@ -71,11 +71,11 @@ export function getBasicColumns(): BasicColumn[] {
           running: { color: '#52c41a', text: `训练中 (${record.progress || 0}%)`, icon: 'sync' },
           completed: { color: '#1890ff', text: '已完成', icon: 'check-circle' },
           stopped: {
-            color: '#faad14',
+            color: record.can_resume ? '#722ed1' : '#8c8c8c',
             text: record.can_resume ? '已停止(可续训)' : '已停止',
             icon: 'pause-circle',
           },
-          stopping: { color: '#faad14', text: '停止中', icon: 'pause-circle' },
+          stopping: { color: '#8c8c8c', text: '停止中', icon: 'pause-circle' },
           error: { color: '#f5222d', text: '失败', icon: 'close-circle' },
           failed: { color: '#f5222d', text: '失败', icon: 'close-circle' },
         };

@@ -178,7 +178,7 @@ const [registerForm, {validate}] = useForm({
 
 onMounted(() => {
   fetch();
-  emit('getMethod', fetch);
+  emit('getMethod', (opts?: { silent?: boolean }) => fetch({}, opts));
 });
 
 watch(() => props.params, () => {
@@ -191,11 +191,13 @@ async function handleSubmit() {
   await fetch(formData);
 }
 
-async function fetch(p: Record<string, unknown> = {}) {
+async function fetch(p: Record<string, unknown> = {}, opts?: { silent?: boolean }) {
   const {api, params} = props;
   if (!api || !isFunction(api)) return;
 
-  state.loading = true;
+  if (!opts?.silent) {
+    state.loading = true;
+  }
   try {
     const res = await api({
       ...params,
@@ -240,7 +242,7 @@ function pageSizeChange(_current: number, size: number) {
   fetch();
 }
 
-type StatusVariant = 'idle' | 'preparing' | 'training' | 'completed' | 'stopped' | 'error';
+type StatusVariant = 'idle' | 'preparing' | 'training' | 'completed' | 'stopped' | 'resumable' | 'error';
 
 const statusVariantMap: Record<string, StatusVariant> = {
   idle: 'idle',
@@ -260,12 +262,16 @@ const statusTheme: Record<StatusVariant, { badgeBg: string; badgeColor: string; 
   preparing: {badgeBg: '#08979c', badgeColor: '#ffffff', progressColor: '#006d75', prominent: true},
   training: {badgeBg: '#f6ffed', badgeColor: '#52c41a', progressColor: '#52c41a'},
   completed: {badgeBg: '#0958d9', badgeColor: '#ffffff', progressColor: '#003eb3', prominent: true},
-  stopped: {badgeBg: '#fff7e6', badgeColor: '#faad14', progressColor: '#faad14'},
+  stopped: {badgeBg: '#f5f5f5', badgeColor: '#595959', progressColor: '#8c8c8c'},
+  resumable: {badgeBg: '#f9f0ff', badgeColor: '#722ed1', progressColor: '#9254de', prominent: true},
   error: {badgeBg: '#cf1322', badgeColor: '#ffffff', progressColor: '#a8071a', prominent: true},
 };
 
 function getStatusVariant(item: Record<string, unknown>): StatusVariant {
   const status = String(item.status || '');
+  if (status === 'stopped' && canResumeTrainTask(item as { status?: string; can_resume?: boolean; checkpoint_dir?: string })) {
+    return 'resumable';
+  }
   return statusVariantMap[status] || 'idle';
 }
 
@@ -318,6 +324,7 @@ function getProgressColor(item: Record<string, unknown>) {
   if (variant === 'preparing') return statusTheme.preparing.progressColor;
   if (variant === 'completed') return statusTheme.completed.progressColor;
   if (variant === 'stopped') return statusTheme.stopped.progressColor;
+  if (variant === 'resumable') return statusTheme.resumable.progressColor;
   if (variant === 'error') return statusTheme.error.progressColor;
   if (variant === 'idle') return statusTheme.idle.progressColor;
 
@@ -416,7 +423,8 @@ function handleDelete(record: Record<string, unknown>) {
     &.status-preparing,
     &.status-training,
     &.status-completed,
-    &.status-stopped {
+    &.status-stopped,
+    &.status-resumable {
       background-image: url('@/assets/images/product/blue-bg.719b437a.png');
     }
 

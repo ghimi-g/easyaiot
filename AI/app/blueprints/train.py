@@ -13,6 +13,7 @@ from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
 import torch
+import yaml
 from flask import current_app, jsonify, Blueprint, request
 from ultralytics import YOLO
 
@@ -75,6 +76,90 @@ def _is_cloud_dataset_path(dataset_path: str) -> bool:
     if dataset_path.startswith('/api/v1/buckets/'):
         return True
     return '://' in dataset_path and not dataset_path.startswith('file://')
+
+
+def _resolve_split_path(raw_path, split_name, yaml_dir, dataset_root):
+    if not raw_path:
+        return None
+
+    normalized_raw = str(raw_path).replace('\\', '/')
+    candidate_bases = [
+        yaml_dir,
+        dataset_root,
+        os.path.dirname(dataset_root),
+    ]
+
+    for base in candidate_bases:
+        candidate = os.path.normpath(os.path.join(base, normalized_raw))
+        if os.path.exists(candidate):
+            return os.path.abspath(candidate)
+
+    split_alias = {
+        'train': ['train'],
+        'val': ['val', 'valid', 'validation'],
+        'test': ['test'],
+    }
+    for alias in split_alias.get(split_name, [split_name]):
+        for base in candidate_bases:
+            img_candidate = os.path.join(base, alias, 'images')
+            if os.path.exists(img_candidate):
+                return os.path.abspath(img_candidate)
+            alt_candidate = os.path.join(base, 'images', alias)
+            if os.path.exists(alt_candidate):
+                return os.path.abspath(alt_candidate)
+
+    return None
+
+
+def _find_first_data_yaml(root_dir):
+    for root, _, files in os.walk(root_dir):
+        for file_name in files:
+            if file_name.lower() == 'data.yaml':
+                return os.path.join(root, file_name)
+    return None
+
+
+def _normalize_dataset_yaml(dataset_root, output_dir=None):
+    """
+    将 data.yaml 中的 train/val/test 转为绝对路径，避免 path: . 导致 Ultralytics 解析到错误目录。
+    兼容本地导出（train/images）与 MinIO 同步（images/train）两种目录结构。
+    """
+    data_yaml = _find_first_data_yaml(dataset_root)
+    if not data_yaml:
+        raise ValueError('未找到 data.yaml，无法开始训练')
+
+    with open(data_yaml, 'r', encoding='utf-8') as f:
+        cfg = yaml.safe_load(f) or {}
+
+    yaml_dir = os.path.dirname(data_yaml)
+    train_path = _resolve_split_path(cfg.get('train'), 'train', yaml_dir, dataset_root)
+    val_path = _resolve_split_path(cfg.get('val'), 'val', yaml_dir, dataset_root)
+    test_path = (
+        _resolve_split_path(cfg.get('test'), 'test', yaml_dir, dataset_root)
+        if cfg.get('test') else None
+    )
+
+    if not train_path:
+        raise ValueError('数据集 train 路径无效，请检查 data.yaml 或目录结构')
+    if not val_path:
+        raise ValueError('数据集 val/valid 路径无效，请检查 data.yaml 或目录结构')
+
+    normalized_cfg = {
+        'train': train_path,
+        'val': val_path,
+        'nc': cfg.get('nc', 1),
+        'names': cfg.get('names', ['object']),
+    }
+    if test_path:
+        normalized_cfg['test'] = test_path
+
+    target_dir = output_dir or dataset_root
+    os.makedirs(target_dir, exist_ok=True)
+    normalized_yaml_path = os.path.join(target_dir, 'data.yaml')
+    with open(normalized_yaml_path, 'w', encoding='utf-8') as f:
+        yaml.safe_dump(normalized_cfg, f, allow_unicode=True, sort_keys=False)
+
+    return normalized_yaml_path
 
 
 def _prepare_train_dataset_in_dir(dataset_path: str, model_dir: str, log_fn):
@@ -326,7 +411,7 @@ def _cleanup_train_dataset_artifacts(model_dir, dataset_zip_path, log_fn=None):
         return
 
     train_results_dir = os.path.join(model_dir, 'train_results')
-    for name in ('images', 'labels'):
+    for name in ('images', 'labels', 'train', 'val', 'test'):
         target = os.path.join(model_dir, name)
         if os.path.isdir(target):
             try:
@@ -913,6 +998,17 @@ def train_model(task_id, epochs=20, model_arch='yolov8n.pt',
                 train_task.error_log = error_msg
                 db.session.commit()
                 raise Exception(error_msg)
+
+            try:
+                data_yaml_path = _normalize_dataset_yaml(model_dir, output_dir=model_dir)
+                update_log_local(f'已标准化 data.yaml 路径: {data_yaml_path}')
+            except Exception as norm_err:
+                error_msg = f'data.yaml 路径标准化失败: {norm_err}'
+                update_log_local(error_msg)
+                train_task.status = 'error'
+                train_task.error_log = error_msg
+                db.session.commit()
+                raise Exception(error_msg) from norm_err
 
             # 更新状态：开始加载模型
             train_status[task_id].update({

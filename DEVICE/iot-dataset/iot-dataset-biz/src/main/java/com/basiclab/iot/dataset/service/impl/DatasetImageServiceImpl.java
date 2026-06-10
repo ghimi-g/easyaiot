@@ -20,6 +20,7 @@ import com.basiclab.iot.dataset.domain.dataset.vo.DatasetTagPageReqVO;
 import com.basiclab.iot.dataset.service.DatasetImageService;
 import com.basiclab.iot.dataset.service.DatasetTagService;
 import com.basiclab.iot.dataset.service.annotation.DatasetAnnotationParseUtil;
+import com.basiclab.iot.dataset.service.annotation.YoloLabelContentBuilder;
 import com.basiclab.iot.dataset.service.ImportCancelChecker;
 import com.basiclab.iot.file.RemoteFileService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -372,65 +373,15 @@ public class DatasetImageServiceImpl implements DatasetImageService {
     private String generateLabelContent(String annotationsJson, Long datasetId) {
         try {
             List<String> classNames = getClassNames(datasetId);
-            Map<String, Integer> nameToIndex = new HashMap<>();
+            Map<String, Integer> nameToIndex = new LinkedHashMap<>();
             for (int i = 0; i < classNames.size(); i++) {
                 nameToIndex.put(classNames.get(i), i);
             }
-            Map<String, String> shortcutToName = new HashMap<>();
-            Map<String, String> nameToShortcut = DatasetAnnotationParseUtil.nameToShortcutFromTags(
-                    datasetTagService.listTagsByDatasetId(datasetId));
-            for (Map.Entry<String, String> entry : nameToShortcut.entrySet()) {
-                shortcutToName.put(entry.getValue(), entry.getKey());
-            }
-
-            List<Map<String, Object>> annotations = parseAnnotations(annotationsJson);
-            StringBuilder labelContent = new StringBuilder();
-
-            for (Map<String, Object> annotation : annotations) {
-                Object labelObj = annotation.get("label");
-                if (labelObj == null) continue;
-                String rawLabel = String.valueOf(labelObj).trim();
-                if (rawLabel.isEmpty()) continue;
-                String labelName = shortcutToName.getOrDefault(rawLabel, rawLabel);
-                Integer classId = nameToIndex.get(labelName);
-                if (classId == null) {
-                    logger.warn("未找到类别映射: shortcut={}, name={}", rawLabel, labelName);
-                    continue;
-                }
-
-                // 获取矩形框的四个顶点（归一化坐标）
-                List<Map<String, Double>> points = (List<Map<String, Double>>) annotation.get("points");
-                if (points == null || points.size() != 4) {
-                    logger.warn("无效的标注点数量: {}", points != null ? points.size() : 0);
-                    continue;
-                }
-
-                // 提取四个顶点的坐标
-                double[] xCoords = new double[4];
-                double[] yCoords = new double[4];
-                for (int i = 0; i < 4; i++) {
-                    Map<String, Double> point = points.get(i);
-                    xCoords[i] = point.get("x");
-                    yCoords[i] = point.get("y");
-                }
-
-                // 计算边界框的最小/最大坐标
-                double minX = Arrays.stream(xCoords).min().getAsDouble();
-                double minY = Arrays.stream(yCoords).min().getAsDouble();
-                double maxX = Arrays.stream(xCoords).max().getAsDouble();
-                double maxY = Arrays.stream(yCoords).max().getAsDouble();
-
-                // 计算YOLO格式的中心点坐标和宽高（归一化值）
-                double centerX = (minX + maxX) / 2.0;
-                double centerY = (minY + maxY) / 2.0;
-                double width = maxX - minX;
-                double height = maxY - minY;
-
-                labelContent.append(String.format("%d %.5f %.5f %.5f %.5f\n",
-                        classId, centerX, centerY, width, height));
-            }
-
-            return labelContent.toString();
+            List<DatasetTagDO> tags = datasetTagService.listTagsByDatasetId(datasetId);
+            Map<String, String> shortcutToName = YoloLabelContentBuilder.buildShortcutToName(tags);
+            Map<String, String> nameToShortcut = YoloLabelContentBuilder.buildNameToShortcut(tags);
+            return YoloLabelContentBuilder.build(
+                    annotationsJson, nameToIndex, shortcutToName, nameToShortcut, null, null);
         } catch (Exception e) {
             throw new RuntimeException("生成标注文件内容失败", e);
         }

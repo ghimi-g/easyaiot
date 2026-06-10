@@ -147,7 +147,7 @@ const form = reactive({
   train_ratio: 0.7,
   val_ratio: 0.2,
   test_ratio: 0.1,
-  sampleSelection: 'all' as 'all' | 'annotated' | 'unannotated',
+  sampleSelection: 'annotated' as 'all' | 'annotated' | 'unannotated',
   selectedClasses: [] as string[],
   filePrefix: '',
 });
