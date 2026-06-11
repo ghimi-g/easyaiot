@@ -90,6 +90,7 @@
 
 import {Icon} from "@/components/Icon";
 import {ref} from "vue";
+import {signStreamUrl, isProtectedStreamUrl, clearTicketForUrl} from "@/views/camera/utils/streamTicket";
 
 export default {
   name: "Player",
@@ -132,6 +133,9 @@ export default {
       showToolBtn: false,
       kbs: 0,
       isFull: false,
+      // 受保护流(secure_link)票据过期/报错时的静默续票重试计数
+      protectedRetries: 0,
+      maxProtectedRetries: 2,
     };
   },
   mounted() {
@@ -143,6 +147,7 @@ export default {
   },
   watch: {
     playUrl(url) {
+      this.protectedRetries = 0; // 切换地址，重置续票重试计数
       if (url && this.jessibuca) {
         this.$nextTick(() => this.play());
       }
@@ -185,10 +190,10 @@ export default {
             isNotMute: true,
             timeout: 10,
             loadingTimeout: 10,
-            loadingTimeoutReplay: true,
-            loadingTimeoutReplayTimes: 2,
-            heartTimeoutReplay: true,
-            heartTimeoutReplayTimes: 2,
+            // 关闭 Jessibuca 自带的「同地址重放」：受保护流的票据会过期，重放旧地址会一直 403。
+            // 改由本组件在 error/timeout 时强制重新签发再重连（见 maybeRenewOnError）。
+            loadingTimeoutReplay: false,
+            heartTimeoutReplay: false,
             wasmDecodeErrorReplay: true,
           },
           options
@@ -211,6 +216,7 @@ export default {
       this.jessibuca.on("play", function () {
         console.log("on play");
         _this.playing = true;
+        _this.protectedRetries = 0; // 成功起播，重置续票重试计数
       });
       this.jessibuca.on("fullscreen", function (msg) {
         console.log("on fullscreen", msg);
@@ -238,10 +244,12 @@ export default {
       });
       this.jessibuca.on("error", function (error) {
         console.log("error", error);
+        if (_this.maybeRenewOnError()) return;
         _this.$emit("stream-error", { type: "error", detail: error });
       });
       this.jessibuca.on("timeout", function () {
         console.log("timeout");
+        if (_this.maybeRenewOnError()) return;
         _this.$emit("stream-error", { type: "timeout" });
       });
       this.jessibuca.on('start', function () {
@@ -275,15 +283,41 @@ export default {
       })
       // console.log(this.jessibuca);
     },
-    play() {
-      // this.jessibuca.onPlay = () => (this.playing = true);
-
+    async play(forceRefresh = false) {
+      // 模板 @click="play" 会把鼠标事件当参数传入，这里归一为布尔，避免手动点播时被误判为强制续票
+      const force = forceRefresh === true;
       if (!this.jessibuca && this.$refs.container) {
         this.create();
       }
-      if (this.playUrl && this.jessibuca) {
-        this.jessibuca.play(this.playUrl);
+      if (!this.playUrl || !this.jessibuca) return;
+
+      let target = this.playUrl;
+      // 受保护流(/ai /live /rtp)需带 secure_link 票据，未签名会被 nginx 403
+      if (isProtectedStreamUrl(this.playUrl)) {
+        const reqUrl = this.playUrl;
+        try {
+          target = await signStreamUrl(this.playUrl, { forceRefresh: force });
+        } catch (e) {
+          // 签发失败(mint 不可用/网络/会话过期)：降级用未签名地址尽力播放，
+          // 不把整路播放卡死在签发服务上：强制校验关闭时仍可播；开启时会 403 ->
+          // on('error') -> maybeRenewOnError 再续票自愈；若是 401，axios 已统一跳登录。
+          console.warn("stream ticket sign failed, fallback to unsigned url", e);
+          target = this.playUrl;
+        }
+        // 防竞态：等待签发期间地址已切换/组件已销毁则放弃
+        if (this.playUrl !== reqUrl || !this.jessibuca) return;
       }
+      this.jessibuca.play(target);
+    },
+    // 受保护流报错(多为票据过期/连接被关)时：强制重新签发并重连，限次防死循环。
+    // 返回 true 表示已接管(吞掉本次错误)，false 表示交回上层 emit stream-error。
+    maybeRenewOnError() {
+      if (!isProtectedStreamUrl(this.playUrl)) return false;
+      if (this.protectedRetries >= this.maxProtectedRetries) return false;
+      this.protectedRetries++;
+      clearTicketForUrl(this.playUrl);
+      this.play(true);
+      return true;
     },
     mute() {
       this.jessibuca.mute();

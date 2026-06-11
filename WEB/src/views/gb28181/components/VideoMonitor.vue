@@ -110,6 +110,7 @@ import { Icon } from '@/components/Icon'
 import { queryAlarmList } from '@/api/device/calculate'
 import { resolveAlertRecordVideoUrl } from '@/utils/alertRecord'
 import { useMessage } from '@/hooks/web/useMessage'
+import { rewriteStreamHostToPageHost } from '@/views/camera/utils/devicePlay'
 import Jessibuca from '@/components/Player/module/jessibuca.vue'
 import DialogPlayer from '@/components/VideoPlayer/DialogPlayer.vue'
 import { useModal } from '@/components/Modal'
@@ -435,7 +436,10 @@ const playDeviceStream = (device: any) => {
     createMessage.warning('该摄像头暂无推流地址')
     return
   }
-  
+
+  // 流地址统一走当前页面 host:port，便于不同环境下浏览器直接拉流
+  streamUrl = rewriteStreamHostToPageHost(streamUrl)
+
   // 确保内部列表已初始化
   const maxCount = getMaxVideoCount(currentLayout.value)
   if (internalVideoList.value.length === 0) {

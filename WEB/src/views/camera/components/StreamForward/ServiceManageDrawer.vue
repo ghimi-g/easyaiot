@@ -147,6 +147,7 @@ import {
 import { Tag, Empty, Spin } from 'ant-design-vue';
 import {Icon} from '@/components/Icon';
 import {useMessage} from '@/hooks/web/useMessage';
+import {rewriteStreamHostToPageHost} from '@/views/camera/utils/devicePlay';
 import {
   type StreamForwardTask,
   getStreamForwardTask,
@@ -655,7 +656,10 @@ const playCameraStream = (stream: CameraStreamInfo) => {
     createMessage.warning(`摄像头 ${stream.device_name} 暂无推流地址`);
     return;
   }
-  
+
+  // 流地址统一走当前页面 host:port，便于不同环境下浏览器直接拉流
+  httpStream = rewriteStreamHostToPageHost(httpStream);
+
   // 打开播放器
   openPlayerModal(true, {
     id: stream.device_id,

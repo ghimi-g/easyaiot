@@ -125,11 +125,33 @@
                     >
                       <Icon icon="ant-design:folder-outlined" :size="15" color="#3B82F6" />
                     </div>
-                    <div class="btn" v-if="item.is_enabled" @click="handleStop(item)">
-                      <Icon icon="ant-design:pause-circle-outlined" :size="15" color="#3B82F6" />
+                    <div
+                      class="btn"
+                      :class="{ disabled: isTaskPending(item.id) }"
+                      v-if="item.is_enabled"
+                      @click="!isTaskPending(item.id) && handleStop(item)"
+                      :title="isTaskPending(item.id) ? '处理中…' : '停止'"
+                    >
+                      <Icon
+                        :icon="isTaskPending(item.id) ? 'ant-design:loading-outlined' : 'ant-design:pause-circle-outlined'"
+                        :spin="isTaskPending(item.id)"
+                        :size="15"
+                        color="#3B82F6"
+                      />
                     </div>
-                    <div class="btn" v-else @click="handleStart(item)">
-                      <Icon icon="ant-design:play-circle-outlined" :size="15" color="#3B82F6" />
+                    <div
+                      class="btn"
+                      :class="{ disabled: isTaskPending(item.id) }"
+                      v-else
+                      @click="!isTaskPending(item.id) && handleStart(item)"
+                      :title="isTaskPending(item.id) ? '处理中…' : '启动'"
+                    >
+                      <Icon
+                        :icon="isTaskPending(item.id) ? 'ant-design:loading-outlined' : 'ant-design:play-circle-outlined'"
+                        :spin="isTaskPending(item.id)"
+                        :size="15"
+                        color="#3B82F6"
+                      />
                     </div>
                     <Popconfirm
                       title="是否确认删除？"
@@ -261,6 +283,7 @@ import { getBasicColumns, getFormConfig } from './Data';
 import AI_TASK_IMAGE from '@/assets/images/video/ai-task.png';
 import SNAP_TASK_IMAGE from '@/assets/images/video/snap-task.png';
 import { Button } from '@/components/Button'
+import { rewriteStreamHostToPageHost } from '@/views/camera/utils/devicePlay';
 const ListItem = List.Item;
 
 defineOptions({ name: 'AlgorithmTask' });
@@ -273,6 +296,19 @@ const viewMode = ref<'table' | 'card'>('card');
 // 卡片模式相关
 const taskList = ref<AlgorithmTask[]>([]);
 const loading = ref(false);
+
+// 启动/停止请求进行中的任务 ID（防止接口未返回前重复点击导致多次调用）
+const pendingTaskIds = ref<number[]>([]);
+const isTaskPending = (id: number) => pendingTaskIds.value.includes(id);
+const setTaskPending = (id: number, pending: boolean) => {
+  if (pending) {
+    if (!pendingTaskIds.value.includes(id)) {
+      pendingTaskIds.value = [...pendingTaskIds.value, id];
+    }
+  } else {
+    pendingTaskIds.value = pendingTaskIds.value.filter((x) => x !== id);
+  }
+};
 const [registerModal, { openDrawer }] = useDrawer();
 const [registerServiceDrawer, { openDrawer: openServiceDrawer }] = useDrawer();
 const [registerRegionDrawer, { openDrawer: openRegionDrawer }] = useDrawer();
@@ -422,14 +458,19 @@ const getTableActions = (record: AlgorithmTask) => {
 
   if (record.is_enabled) {
     actions.push({
-      icon: 'ant-design:pause-circle-outlined',
-      tooltip: '停止',
+      // pending 时隐藏静态图标，改用 a-button 自带 loading 转圈，避免出现双图标
+      icon: isTaskPending(record.id) ? undefined : 'ant-design:pause-circle-outlined',
+      loading: isTaskPending(record.id),
+      tooltip: isTaskPending(record.id) ? '处理中…' : '停止',
+      disabled: isTaskPending(record.id),
       onClick: () => handleStop(record),
     });
   } else {
     actions.push({
-      icon: 'ant-design:play-circle-outlined',
-      tooltip: '启动',
+      icon: isTaskPending(record.id) ? undefined : 'ant-design:play-circle-outlined',
+      loading: isTaskPending(record.id),
+      tooltip: isTaskPending(record.id) ? '处理中…' : '启动',
+      disabled: isTaskPending(record.id),
       onClick: () => handleStart(record),
     });
   }
@@ -643,6 +684,8 @@ const handleDelete = async (record: AlgorithmTask) => {
 };
 
 const handleStart = async (record: AlgorithmTask) => {
+  if (isTaskPending(record.id)) return;
+  setTaskPending(record.id, true);
   try {
     const response = await startAlgorithmTask(record.id);
     // 由于 isTransformResponse: true，成功时返回的是任务对象（data.data），而不是包含 code 的响应对象
@@ -673,10 +716,14 @@ const handleStart = async (record: AlgorithmTask) => {
   } catch (error) {
     console.error('启动算法任务失败', error);
     createMessage.error('启动失败');
+  } finally {
+    setTaskPending(record.id, false);
   }
 };
 
 const handleStop = async (record: AlgorithmTask) => {
+  if (isTaskPending(record.id)) return;
+  setTaskPending(record.id, true);
   try {
     const response = await stopAlgorithmTask(record.id);
     // 由于 isTransformResponse: true，成功时返回的是任务对象，而不是包含 code 的响应对象
@@ -697,6 +744,8 @@ const handleStop = async (record: AlgorithmTask) => {
   } catch (error) {
     console.error('停止算法任务失败', error);
     createMessage.error('停止失败');
+  } finally {
+    setTaskPending(record.id, false);
   }
 };
 
@@ -880,7 +929,10 @@ const playCameraStream = (stream: CameraStreamInfo) => {
     createMessage.warning(`摄像头 ${stream.device_name} 暂无推流地址`);
     return;
   }
-  
+
+  // 将流地址的 IP+端口改写为当前浏览器地址，便于不同环境下直接拉流
+  httpStream = rewriteStreamHostToPageHost(httpStream);
+
   // 打开播放器
   openPlayerModal(true, {
     id: stream.device_id,

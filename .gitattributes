@@ -34,6 +34,19 @@ Dockerfile.*   text eol=lf
 .dockerignore  text eol=lf
 env.example    text eol=lf
 
+# ── 加固：以下文本文件也强制 LF（即使从 Windows 编辑/提交也规范化为 LF）──
+#   .env / .env.*  环境变量：CRLF 会给值末尾加 \r，污染密钥（如 STREAM_TICKET_SECRET 与 nginx 不一致致验签失败）、VITE_PROXY 等
+#   *.conf         nginx 等配置（如 WEB/conf/nginx.conf）
+#   *.py *.ts *.vue *.js  源码：避免整文件 diff 噪音与潜在 \r 问题
+# 注意：eol=lf 只管行尾，不管 BOM —— Windows 上请用「UTF-8 无 BOM」保存（文件含中文注释，勿用记事本）
+.env           text eol=lf
+.env.*         text eol=lf
+*.conf         text eol=lf
+*.py           text eol=lf
+*.ts           text eol=lf
+*.vue          text eol=lf
+*.js           text eol=lf
+
 *.png binary
 *.jpg binary
 *.mp4 binary

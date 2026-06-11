@@ -3,10 +3,13 @@
 @email andywebjava@163.com
 @wechat EasyAIoT2025
 """
+import base64
 import datetime
+import hashlib
 import io
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -35,6 +38,71 @@ from sqlalchemy import and_
 
 camera_bp = Blueprint('camera', __name__)
 logger = logging.getLogger(__name__)
+
+# 受保护的流路径前缀（SRS http-flv: /ai /live；ZLMediaKit ws-flv: /rtp）
+_STREAM_PATH_RE = re.compile(r'^/(ai|live|rtp)/')
+# 网关登录校验地址（host 网络下走宿主机网关 48080）；可用 AUTH_CHECK_URL 覆盖
+_AUTH_CHECK_URL = os.environ.get(
+    'AUTH_CHECK_URL', 'http://127.0.0.1:48080/admin-api/system/auth/get-permission-info'
+)
+
+
+def _check_login(req) -> bool:
+    """用请求里的 JWT 调网关校验登录态：HTTP 200 且业务 code==0 才算有效。
+
+    nginx 把 /dev-api/video/ 直连 VIDEO 绕过了网关，故签发接口必须自校验登录。
+    """
+    auth = (req.headers.get('Authorization') or req.headers.get('X-Authorization') or '').strip()
+    if not auth:
+        return False
+    try:
+        r = requests.get(
+            _AUTH_CHECK_URL,
+            headers={
+                'Authorization': auth,
+                'tenant-id': req.headers.get('tenant-id', '') or req.headers.get('Tenant-Id', ''),
+            },
+            timeout=5,
+        )
+        if r.status_code != 200:
+            return False
+        body = r.json()
+        return isinstance(body, dict) and body.get('code') == 0
+    except Exception as e:
+        logger.warning(f'流票据登录校验失败: {e}')
+        return False
+
+
+@camera_bp.route('/stream/ticket/sign', methods=['POST'])
+def sign_stream_ticket():
+    """为流地址签发短期 secure_link 票据（需登录）。
+
+    请求: { "path": "/rtp/xxx.live.flv", "ttl": 90 }
+    返回: { "code": 0, "data": { "e": <过期unix秒>, "st": <url-safe base64 md5> } }
+    未登录/过期: HTTP 401（前端 axios 据此跳登录）。
+
+    签名公式必须与 nginx `secure_link_md5 "$arg_e$uri <secret>"` 逐字符一致：
+    md5( f"{e}{path} {secret}" ) -> url-safe base64 -> 去掉 '=' 填充。
+    """
+    if not _check_login(request):
+        return jsonify({'code': 401, 'msg': 'unauthorized'}), 401
+    data = request.get_json(silent=True) or {}
+    path = (data.get('path') or '').strip()
+    if not _STREAM_PATH_RE.match(path):
+        return jsonify({'code': 400, 'msg': 'invalid stream path'}), 400
+    secret = os.environ.get('STREAM_TICKET_SECRET', '')
+    if not secret:
+        logger.error('STREAM_TICKET_SECRET 未配置，无法签发流票据')
+        return jsonify({'code': 500, 'msg': 'stream ticket secret not configured'}), 500
+    try:
+        ttl = int(data.get('ttl') or 90)
+    except (TypeError, ValueError):
+        ttl = 90
+    ttl = max(15, min(ttl, 600))
+    e = int(time.time()) + ttl
+    raw = hashlib.md5(f"{e}{path} {secret}".encode('utf-8')).digest()
+    st = base64.urlsafe_b64encode(raw).decode('ascii').rstrip('=')
+    return jsonify({'code': 0, 'msg': 'success', 'data': {'e': e, 'st': st}})
 
 
 def _strip_rtsp_transport_query(source_url: str) -> tuple[str, Optional[str]]:

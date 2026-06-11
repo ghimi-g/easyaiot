@@ -65,6 +65,8 @@ services:
       # 数据库配置（使用localhost，因为使用host网络模式，中间件端口已映射到宿主机）
       - DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-video20
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-please-change-this-to-a-random-string}
+      # 流地址 secure_link 签名密钥 STREAM_TICKET_SECRET 由挂载的 .env.docker 提供（容器内 /app/.env，
+      # 经 dotenv 加载进 os.environ），无需在此重复；密钥须与 WEB/conf/nginx.conf 的 $stream_secret 一致。
       # Nacos配置（使用localhost，因为使用host网络模式）
       - NACOS_SERVER=${NACOS_SERVER:-localhost:8848}
       - NACOS_NAMESPACE=${NACOS_NAMESPACE:-}

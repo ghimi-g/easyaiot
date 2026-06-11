@@ -14,6 +14,24 @@ const commonApi = (method: 'get' | 'post' | 'delete' | 'put', url: string, param
   }, { isTransformResponse: isTransformResponse });
 };
 
+// ====================== 流地址 secure_link 签名票据 ======================
+export interface StreamTicketResp {
+  /** 过期 unix 秒 */
+  e: number;
+  /** url-safe base64 的 md5 签名 */
+  st: string;
+}
+
+/**
+ * 为受保护的流路径（/ai /live /rtp）签发短期 secure_link 票据。
+ * 需登录；未登录/会话过期返回 401，由 axios 拦截器统一跳登录。
+ * @param path 流地址的 pathname，例如 /rtp/xxx.live.flv
+ * @param ttl  有效期（秒），默认 90
+ */
+export const signStreamTicket = (path: string, ttl = 90): Promise<StreamTicketResp> => {
+  return commonApi('post', `${CAMERA_PREFIX}/stream/ticket/sign`, { path, ttl }) as Promise<StreamTicketResp>;
+};
+
 // ====================== 流媒体转发接口 ======================
 /**
  * 启动FFmpeg转发RTSP流到RTMP服务器
