@@ -4,7 +4,9 @@ import { useRouter } from 'vue-router';
 import { BasicForm, useForm } from '@/components/Form';
 import { Button } from '@/components/Button';
 import { Icon } from '@/components/Icon';
-import { AlertDeviceMap, useAlertMapData } from '@/components/TiandituMap';
+import { AlertDeviceMap } from '@/components/TiandituMap';
+import CameraInlinePreview from '@/components/TiandituMap/src/components/CameraInlinePreview.vue';
+import CameraPtzPad from '@/components/TiandituMap/src/components/CameraPtzPad.vue';
 import type { AlertMapQuery } from '@/components/TiandituMap';
 import type { MapMarkerData } from '@/components/TiandituMap';
 import { MapLayerSwitcher } from '@/components/MapLayerSwitcher';
@@ -41,14 +43,27 @@ const mapRef = ref<InstanceType<typeof AlertDeviceMap> | null>(null);
 const mapQuery = ref<AlertMapQuery>({ pageNo: 1, pageSize: 500 });
 const selectedAlertId = ref<string | null>(null);
 const selectedCameraId = ref<string | null>(null);
+const previewOpen = ref(false);
+const ptzOpen = ref(false);
 const showCameras = ref(true);
 const showAlerts = ref(true);
 const appliedFilters = ref<Record<string, unknown>>({});
 
-const alertData = useAlertMapData();
+// 切换选中摄像头时关闭内联预览/云台，避免操作到上一台设备
+watch(selectedCameraId, () => {
+  previewOpen.value = false;
+  ptzOpen.value = false;
+});
 
-const locatedCount = computed(() => alertData.alertsWithLocation.value.length);
-const unlocatedCount = computed(() => alertData.alerts.value.length - locatedCount.value);
+// 复用地图组件内部的 useAlertMapData 实例（地图通过 defineExpose 暴露），
+// 避免侧栏再单独拉取一份告警+摄像头数据造成重复请求
+const mapData = computed(() => mapRef.value?.alertData ?? null);
+
+const locatedCount = computed(() => mapData.value?.alertsWithLocation.value.length ?? 0);
+const unlocatedCount = computed(() =>
+  mapData.value ? mapData.value.alerts.value.length - mapData.value.alertsWithLocation.value.length : 0,
+);
+const dataLoading = computed(() => mapData.value?.loading.value ?? false);
 
 watch(
   [locatedCount, unlocatedCount],
@@ -60,18 +75,25 @@ watch(
 
 const selectedAlert = computed(() => {
   if (!selectedAlertId.value) return null;
-  return alertData.alertsWithLocation.value.find((a) => String(a.id) === selectedAlertId.value) ?? null;
+  return mapData.value?.alertsWithLocation.value.find((a) => String(a.id) === selectedAlertId.value) ?? null;
 });
 
 const selectedCamera = computed(() => {
   if (!selectedCameraId.value) return null;
-  return alertData.deviceData.findById(selectedCameraId.value) ?? null;
+  return mapData.value?.deviceData.findById(selectedCameraId.value) ?? null;
+});
+
+// 可转动相机才显示云台：GB28181 ptzType ∈ {1球机,4遥控枪机,5遥控半球} 或具备 PTZ 转动能力
+const canPtzSelectedCamera = computed(() => {
+  const cam = selectedCamera.value;
+  if (!cam) return false;
+  return cam.ptz_type === 1 || cam.ptz_type === 4 || cam.ptz_type === 5 || cam.support_move === true;
 });
 
 const linkedCamera = computed(() => {
   const alert = selectedAlert.value;
   if (!alert?.device_id) return null;
-  return alertData.deviceData.findById(String(alert.device_id)) ?? null;
+  return mapData.value?.deviceData.findById(String(alert.device_id)) ?? null;
 });
 
 const canSetSelectedCameraLocation = computed(() =>
@@ -113,7 +135,7 @@ const [registerForm, { validate, setFieldsValue, resetFields, getFieldsValue }] 
 );
 
 async function loadData() {
-  await alertData.loadAlerts(mapQuery.value);
+  // 数据加载只走地图组件（其 loadAlerts 已做并发去重），侧栏统计响应式读取同一实例
   await mapRef.value?.refresh();
   await nextTick();
   mapRef.value?.updateMapSize?.();
@@ -193,11 +215,9 @@ function onMarkerClick(marker: MapMarkerData) {
     return;
   }
   if (marker.kind === 'camera') {
+    // 仅选中、打开右侧详情；不再自动放大/平移地图（点击即猛缩放体验不佳）
     selectedCameraId.value = marker.id;
     selectedAlertId.value = null;
-    if (marker.lng != null && marker.lat != null) {
-      mapRef.value?.flyTo(Number(marker.lng), Number(marker.lat));
-    }
   }
 }
 
@@ -334,7 +354,7 @@ defineExpose({ refresh: loadData, resizeMap, applyFilters, init });
             <Button
               type="primary"
               class="geo-loc-panel__btn-submit"
-              :loading="alertData.loading.value"
+              :loading="dataLoading"
               @click="handleSearch"
             >
               查询
@@ -359,8 +379,25 @@ defineExpose({ refresh: loadData, resizeMap, applyFilters, init });
             </p>
             <div class="alert-map-detail-actions">
               <Button size="small" type="primary" preIcon="octicon:play-16" @click="handlePlay">播放</Button>
+              <Button
+                size="small"
+                :type="previewOpen ? 'primary' : 'default'"
+                preIcon="ant-design:video-camera-outlined"
+                @click="previewOpen = !previewOpen"
+              >
+                {{ previewOpen ? '收起' : '预览' }}
+              </Button>
               <Button size="small" preIcon="ant-design:eye-filled" @click="handleView">详情</Button>
               <Button size="small" preIcon="ant-design:edit-filled" @click="handleEdit">编辑</Button>
+              <Button
+                v-if="canPtzSelectedCamera"
+                size="small"
+                :type="ptzOpen ? 'primary' : 'default'"
+                preIcon="ant-design:control-outlined"
+                @click="ptzOpen = !ptzOpen"
+              >
+                云台
+              </Button>
               <Button
                 v-if="canSetSelectedCameraLocation"
                 size="small"
@@ -370,6 +407,12 @@ defineExpose({ refresh: loadData, resizeMap, applyFilters, init });
                 设置坐标
               </Button>
             </div>
+            <CameraInlinePreview v-if="previewOpen" :device-id="selectedCamera.id" />
+            <CameraPtzPad
+              v-if="ptzOpen && canPtzSelectedCamera"
+              :device-id="selectedCamera.id"
+              :device-kind="selectedCamera.device_kind"
+            />
           </template>
 
           <template v-else-if="selectedAlert">

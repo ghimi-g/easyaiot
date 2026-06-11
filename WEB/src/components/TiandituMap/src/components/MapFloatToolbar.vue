@@ -7,21 +7,25 @@ withDefaults(
     loading?: boolean;
     showRefresh?: boolean;
     showFit?: boolean;
+    showReset?: boolean;
     showBaseMapSwitch?: boolean;
   }>(),
   {
     loading: false,
     showRefresh: true,
     showFit: true,
+    showReset: true,
     showBaseMapSwitch: true,
   },
 );
 
 const baseMapType = defineModel<TiandituBaseMapType>('baseMapType', { default: 'vec' });
+const showLabel = defineModel<boolean>('showLabel', { default: true });
 
 const emit = defineEmits<{
   refresh: [];
   fit: [];
+  reset: [];
 }>();
 </script>
 
@@ -32,7 +36,7 @@ const emit = defineEmits<{
     </div>
 
     <div class="map-float-toolbar__right">
-      <div v-if="showRefresh || showFit || $slots.extra" class="map-float-toolbar__actions">
+      <div v-if="showRefresh || showFit || showReset || $slots.extra" class="map-float-toolbar__actions">
         <a-button
           v-if="showRefresh"
           type="default"
@@ -42,6 +46,16 @@ const emit = defineEmits<{
           @click="emit('refresh')"
         >
           刷新
+        </a-button>
+        <a-button
+          v-if="showReset"
+          type="default"
+          class="map-float-toolbar__btn"
+          preIcon="ant-design:compass-outlined"
+          title="复位到默认视野"
+          @click="emit('reset')"
+        >
+          复位
         </a-button>
         <a-button
           v-if="showFit"
@@ -56,7 +70,7 @@ const emit = defineEmits<{
       </div>
 
       <span
-        v-if="showBaseMapSwitch && (showRefresh || showFit || $slots.extra)"
+        v-if="showBaseMapSwitch && (showRefresh || showFit || showReset || $slots.extra)"
         class="map-float-toolbar__sep"
         aria-hidden="true"
       />
@@ -64,6 +78,7 @@ const emit = defineEmits<{
       <MapBaseMapSwitcher
         v-if="showBaseMapSwitch"
         v-model:base-map-type="baseMapType"
+        v-model:show-label="showLabel"
         class="map-float-toolbar__base-map"
       />
     </div>

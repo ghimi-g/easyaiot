@@ -260,6 +260,57 @@ def _apply_gb_location(device, location: dict) -> bool:
     return changed
 
 
+# GB28181 通道目录属性 → Device 列。WVP 通道 JSON 用 gb 前缀键(CommonGBChannel)，
+# 老结构(DeviceChannel)用无前缀键，故按 gbX 优先、X 回退读取。
+_CHANNEL_ATTR_KEYS = (
+    ('ptz_type', ('gbPtzType', 'ptzType')),
+    ('direction_type', ('gbDirectionType', 'directionType')),
+    ('position_type', ('gbPositionType', 'positionType')),
+    ('room_type', ('gbRoomType', 'roomType')),
+    ('use_type', ('gbUseType', 'useType')),
+    ('supply_light_type', ('gbSupplyLightType', 'supplyLightType')),
+)
+
+
+def _parse_int(value) -> Optional[int]:
+    if value in (None, ''):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_channel_attributes(item: dict) -> dict:
+    """从 WVP 通道数据提取相机结构/方位/业务分类等目录属性（缺失则不含该键）。"""
+    attrs: dict = {}
+    for col, keys in _CHANNEL_ATTR_KEYS:
+        raw = next((item.get(k) for k in keys if item.get(k) not in (None, '')), None)
+        parsed = _parse_int(raw)
+        if parsed is not None:
+            attrs[col] = parsed
+    resolution = next(
+        (item.get(k) for k in ('gbResolution', 'resolution') if item.get(k) not in (None, '')),
+        None,
+    )
+    if resolution is not None:
+        attrs['resolution'] = str(resolution).strip()[:100]
+    return attrs
+
+
+def _apply_gb_attributes(device, attributes: dict) -> bool:
+    """写入国标目录属性（设备固有属性，非用户维护，直接覆盖）。"""
+    if not attributes:
+        return False
+    changed = False
+    for col in ('ptz_type', 'direction_type', 'position_type',
+                'room_type', 'use_type', 'supply_light_type', 'resolution'):
+        if col in attributes and getattr(device, col, None) != attributes[col]:
+            setattr(device, col, attributes[col])
+            changed = True
+    return changed
+
+
 def _upsert_gb_device(
     sip_device_id: str,
     channel_id: str,
@@ -267,6 +318,7 @@ def _upsert_gb_device(
     default_dir_id: int,
     *,
     location: dict | None = None,
+    attributes: dict | None = None,
 ) -> bool:
     mapped_id = _virtual_device_id(sip_device_id, channel_id)
     source = f'{GB28181_SOURCE_PREFIX}{sip_device_id}/{channel_id}'
@@ -297,11 +349,14 @@ def _upsert_gb_device(
             changed = True
         if _apply_gb_location(device, location or {}):
             changed = True
+        if _apply_gb_attributes(device, attributes or {}):
+            changed = True
         if changed:
             db.session.commit()
         return False
 
     loc = location or {}
+    attrs = attributes or {}
     device = Device(
         id=mapped_id,
         name=name or mapped_id,
@@ -321,6 +376,13 @@ def _upsert_gb_device(
         address=loc.get('address'),
         location_source='gb28181' if loc.get('longitude') is not None and loc.get('latitude') is not None else None,
         location_updated_at=datetime.utcnow() if loc.get('longitude') is not None and loc.get('latitude') is not None else None,
+        ptz_type=attrs.get('ptz_type'),
+        direction_type=attrs.get('direction_type'),
+        position_type=attrs.get('position_type'),
+        room_type=attrs.get('room_type'),
+        use_type=attrs.get('use_type'),
+        supply_light_type=attrs.get('supply_light_type'),
+        resolution=attrs.get('resolution'),
     )
     db.session.add(device)
     db.session.commit()
@@ -424,6 +486,7 @@ def sync_gb28181_channels_from_payload(
             if _upsert_gb_device(
                 sip, ch_id, name, default_dir.id,
                 location=_extract_channel_location(item),
+                attributes=_extract_channel_attributes(item),
             ):
                 created += 1
         except Exception as e:
@@ -546,6 +609,7 @@ def sync_gb28181_channels_to_devices(*, strict: bool = False) -> Dict[str, Any]:
                 if _upsert_gb_device(
                     parent_id, channel_id, ch_name, default_dir.id,
                     location=_extract_channel_location(ch),
+                    attributes=_extract_channel_attributes(ch),
                 ):
                     created += 1
             except Exception as e:

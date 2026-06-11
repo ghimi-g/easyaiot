@@ -28,6 +28,8 @@ const {
   tryInitMap,
   updateSize,
   switchBaseMap,
+  setLabelVisible,
+  resetView,
   flyTo,
   fitExtent,
 } = useOpenLayersMap(containerRef, {
@@ -35,6 +37,9 @@ const {
   zoom: props.zoom,
   baseMapType: props.baseMapType,
   showScaleLine: props.showScaleLine,
+  showZoom: props.showZoom,
+  showFullScreen: props.showFullScreen,
+  showOverview: props.showOverview,
   onClick: props.clickable
     ? ({ lng, lat }) => emit('map-click', { lng, lat })
     : undefined,
@@ -70,7 +75,7 @@ onBeforeUnmount(() => {
 
 watch(() => props.baseMapType, (t) => switchBaseMap(t));
 
-defineExpose({ map, flyTo, fitExtent, switchBaseMap, baseMapType, updateSize, tryInitMap });
+defineExpose({ map, flyTo, fitExtent, switchBaseMap, setLabelVisible, resetView, baseMapType, updateSize, tryInitMap });
 </script>
 
 <template>
@@ -105,6 +110,53 @@ defineExpose({ map, flyTo, fitExtent, switchBaseMap, baseMapType, updateSize, tr
 </style>
 
 <style lang="less">
+/**
+ * OpenLayers 原生控件重新布局，避开顶部浮动工具栏/左上搜索框/左下图例：
+ * 缩放与全屏移到左侧中部纵向排列，比例尺移到底部居中，鹰眼(若启用)置右下。
+ */
+.basic-tianditu-map {
+  .ol-zoom {
+    top: 50%;
+    left: 8px;
+    right: auto;
+    bottom: auto;
+    transform: translateY(-50%);
+  }
+
+  .ol-full-screen {
+    top: calc(50% + 46px);
+    left: 8px;
+    right: auto;
+    bottom: auto;
+  }
+
+  .ol-scale-line {
+    left: 50%;
+    bottom: 10px;
+    transform: translateX(-50%);
+  }
+
+  .ol-overview-map {
+    left: auto;
+    right: 10px;
+    bottom: 40px;
+  }
+}
+
+/** 测距/测面实时数值气泡 */
+.tianditu-measure-tip {
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  background: rgba(250, 140, 22, 0.95);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 18%);
+  pointer-events: none;
+  transform: translateY(-2px);
+}
+
 .tianditu-map-popup {
   background: #fff;
   border-radius: 10px;
@@ -125,6 +177,18 @@ defineExpose({ map, flyTo, fitExtent, switchBaseMap, baseMapType, updateSize, tr
     font-size: 11px;
     color: #64748b;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  &__meta {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #334155;
+  }
+
+  &__tags {
+    margin-top: 3px;
+    font-size: 11px;
+    color: #266cfb;
   }
 }
 </style>

@@ -23,7 +23,11 @@ export function useAlertMapData() {
   const error = ref<string | null>(null);
   const deviceData = useDeviceMapData();
 
-  async function loadAlerts(params: AlertMapQuery = {}) {
+  // 同一查询并发去重：侧栏与地图常以相同参数同时触发加载，合并为一次网络请求
+  let inFlight: Promise<void> | null = null;
+  let inFlightKey = '';
+
+  async function doLoad(params: AlertMapQuery) {
     loading.value = true;
     error.value = null;
     try {
@@ -52,10 +56,25 @@ export function useAlertMapData() {
     }
   }
 
+  async function loadAlerts(params: AlertMapQuery = {}) {
+    const key = JSON.stringify(params ?? {});
+    if (inFlight && key === inFlightKey) return inFlight;
+    inFlightKey = key;
+    const run = doLoad(params);
+    inFlight = run;
+    try {
+      await run;
+    } finally {
+      if (inFlight === run) inFlight = null;
+    }
+  }
+
   function enrichAlertsWithLocation() {
+    // 先建索引，避免逐条 findById 造成 O(告警数 × 设备数) 扫描
+    const byId = new Map(deviceData.devices.value.map((d) => [String(d.id), d]));
     alerts.value = alerts.value.map((alert) => {
       if (!alert.device_id) return alert;
-      const device = deviceData.findById(alert.device_id);
+      const device = byId.get(String(alert.device_id));
       if (!device) return alert;
       return { ...alert, lng: device.lng, lat: device.lat };
     });
@@ -64,6 +83,21 @@ export function useAlertMapData() {
   const alertsWithLocation = computed(() =>
     alerts.value.filter((a) => a.lng != null && a.lat != null),
   );
+
+  /** 按摄像头(device_id)分组的告警列表（时间倒序），供悬浮卡片查询明细 */
+  const alertsByDevice = computed(() => {
+    const map = new Map<string, AlertMapItem[]>();
+    alertsWithLocation.value.forEach((a) => {
+      if (!a.device_id) return;
+      const id = String(a.device_id);
+      const list = map.get(id);
+      if (list) list.push(a);
+      else map.set(id, [a]);
+    });
+    const toTs = (t?: string) => (t ? Date.parse(t) || 0 : 0);
+    map.forEach((list) => list.sort((x, y) => toTs(y.time) - toTs(x.time)));
+    return map;
+  });
 
   function toAlertMarkers(): MapMarkerData[] {
     return alertsWithLocation.value.map((a) => ({
@@ -81,20 +115,36 @@ export function useAlertMapData() {
     return deviceData.toMarkers();
   }
 
-  /** 合并摄像头 + 告警（同坐标告警偏移避免重叠） */
-  function toCombinedMarkers(): MapMarkerData[] {
-    const cameraMarkers = toCameraMarkers();
-    const alertMarkers = toAlertMarkers();
-    const coordCount = new Map<string, number>();
+  /** 按摄像头(device_id)统计已定位告警条数 */
+  function alertCountByDevice(): Map<string, number> {
+    const counts = new Map<string, number>();
+    alertsWithLocation.value.forEach((a) => {
+      if (!a.device_id) return;
+      const id = String(a.device_id);
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    });
+    return counts;
+  }
 
-    return [...cameraMarkers, ...alertMarkers.map((m) => {
-      const key = `${m.lng.toFixed(5)},${m.lat.toFixed(5)}`;
-      const count = coordCount.get(key) ?? 0;
-      coordCount.set(key, count + 1);
-      if (count === 0) return m;
-      const offset = count * 0.00015;
-      return { ...m, lng: m.lng + offset, lat: m.lat + offset };
-    })];
+  /**
+   * 合并摄像头 + 告警：告警没有独立坐标（借用所在摄像头坐标），逐条上图会造成
+   * 重叠/散开/与聚合圈混淆。改为按摄像头聚合——有告警的摄像头本体变红并显示告警
+   * 数量徽标（count），无告警的摄像头保持蓝色。位置真实、无重复、不混淆。
+   */
+  function toCombinedMarkers(): MapMarkerData[] {
+    const counts = alertCountByDevice();
+    return toCameraMarkers().map((cam) => {
+      const n = counts.get(cam.id) ?? 0;
+      return n > 0 ? { ...cam, count: n } : cam;
+    });
+  }
+
+  /** 仅告警视图：只显示有告警的摄像头（红色 + 数量徽标） */
+  function toAlertedCameraMarkers(): MapMarkerData[] {
+    const counts = alertCountByDevice();
+    return toCameraMarkers()
+      .filter((cam) => (counts.get(cam.id) ?? 0) > 0)
+      .map((cam) => ({ ...cam, count: counts.get(cam.id) }));
   }
 
   return {
@@ -103,10 +153,12 @@ export function useAlertMapData() {
     total,
     error,
     alertsWithLocation,
+    alertsByDevice,
     deviceData,
     loadAlerts,
     toAlertMarkers,
     toCameraMarkers,
+    toAlertedCameraMarkers,
     toCombinedMarkers,
   };
 }

@@ -275,6 +275,24 @@ export interface DeviceLocationInfo {
   location_updated_at?: string | null;
   has_location?: boolean;
   device_kind?: string;
+  /** 是否支持云台转动(PTZ)，用于地图区分球机/枪机 */
+  support_move?: boolean | null;
+  /** 是否支持变倍(zoom) */
+  support_zoom?: boolean | null;
+  /** GB28181 摄像机结构: 1球机 2半球 3固定枪机 4遥控枪机 5遥控半球 6/7多目 */
+  ptz_type?: number | null;
+  /** GB28181 监视方位(光轴): 1东2西3南4北5东南6东北7西南8西北 */
+  direction_type?: number | null;
+  /** GB28181 位置类型: 1检查站2党政3车站4广场5体育场馆6商业中心7宗教8校园9治安复杂10交通干线 */
+  position_type?: number | null;
+  /** GB28181 安装位置: 1室外 2室内 */
+  room_type?: number | null;
+  /** GB28181 用途: 1治安 2交通 3重点 */
+  use_type?: number | null;
+  /** GB28181 补光: 1无 2红外 3白光 4激光 9其他 */
+  supply_light_type?: number | null;
+  /** GB28181 分辨率(可多值) */
+  resolution?: string | null;
 }
 
 /** 查询摄像头位置列表（地图/轨迹等场景） */

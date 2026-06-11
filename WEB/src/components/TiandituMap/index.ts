@@ -19,4 +19,7 @@ export { default as MapLocationPicker } from './src/MapLocationPicker.vue';
 export { default as DeviceMonitorMap } from './src/DeviceMonitorMap.vue';
 export { default as AlertDeviceMap } from './src/AlertDeviceMap.vue';
 export { default as TrackPlaybackMap } from './src/TrackPlaybackMap.vue';
-export { default as GisMapConsole } from './src/GisMapConsole.vue';
+// GisMapConsole 目前无任何页面/路由引用：从 barrel 移除以免其 scoped CSS 分块被打进
+// 预加载图（重新部署后旧哈希 404 → "Unable to preload CSS" 报错）。如需使用请直接
+// 从 './src/GisMapConsole.vue' 导入。
+// export { default as GisMapConsole } from './src/GisMapConsole.vue';

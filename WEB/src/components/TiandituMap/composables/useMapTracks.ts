@@ -1,4 +1,4 @@
-import { ref, shallowRef, type Ref } from 'vue';
+import { onBeforeUnmount, ref, shallowRef, type Ref } from 'vue';
 import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
 import Feature from 'ol/Feature';
@@ -142,6 +142,9 @@ export function useMapTracks(options: UseMapTracksOptions) {
     stopPlayback();
     options.map.value?.removeLayer(layer);
   }
+
+  // 与 useMapMarkers 一致：组件卸载时停止回放并移除图层，避免 rAF 循环泄漏
+  onBeforeUnmount(detach);
 
   return {
     layer: shallowRef(layer),

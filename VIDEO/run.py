@@ -315,6 +315,13 @@ def create_app():
                     ('location_source', 'VARCHAR(20)'),
                     ('location_updated_at', 'TIMESTAMP WITHOUT TIME ZONE'),
                     ('heading', 'DOUBLE PRECISION'),
+                    ('ptz_type', 'SMALLINT'),
+                    ('direction_type', 'SMALLINT'),
+                    ('position_type', 'SMALLINT'),
+                    ('room_type', 'SMALLINT'),
+                    ('use_type', 'SMALLINT'),
+                    ('supply_light_type', 'SMALLINT'),
+                    ('resolution', 'VARCHAR(100)'),
                 ):
                     r = db.session.execute(text("""
                         SELECT EXISTS (

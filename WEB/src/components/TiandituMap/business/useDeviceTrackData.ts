@@ -34,33 +34,48 @@ export function useDeviceTrackData() {
   }
 
   async function loadSessionPoints(sessionId: number | string): Promise<DeviceTrackPointInfo[]> {
-    const res = await getDeviceTrackPoints({ session_id: sessionId });
-    const list = Array.isArray(res) ? res : (res as { data?: DeviceTrackPointInfo[] })?.data || [];
-    return list;
+    try {
+      const res = await getDeviceTrackPoints({ session_id: sessionId });
+      const list = Array.isArray(res) ? res : (res as { data?: DeviceTrackPointInfo[] })?.data || [];
+      return list;
+    } catch (e) {
+      console.warn(`[TiandituMap] 轨迹点位加载失败 session=${sessionId}：`, e);
+      return [];
+    }
   }
 
   async function toMapTrackSessions(sessionIds?: Array<number | string>): Promise<MapTrackSession[]> {
     const ids = sessionIds?.length
       ? sessionIds
       : sessions.value.map((s) => s.id);
+
+    // 各段点位并发加载，避免逐段串行等待
+    const loaded = await Promise.all(
+      ids.map(async (id) => ({ id, points: await loadSessionPoints(id) })),
+    );
+
     const result: MapTrackSession[] = [];
-    for (const id of ids) {
-      const meta = sessions.value.find((s) => String(s.id) === String(id));
-      const points = await loadSessionPoints(id);
-      if (!points.length) continue;
-      result.push({
-        id: String(id),
-        deviceId: meta?.device_id || points[0]?.device_id || '',
-        title: meta?.title || `轨迹 #${id}`,
-        color: '#52c41a',
-        points: points.map((p) => ({
+    for (const { id, points } of loaded) {
+      // 过滤经纬度非法(NaN)的脏点，否则 toMercator 会产出 NaN 几何导致线段渲染异常
+      const validPoints = points
+        .map((p) => ({
           lng: Number(p.longitude),
           lat: Number(p.latitude),
           recordedAt: p.recorded_at,
           altitude: p.altitude ?? undefined,
           speed: p.speed ?? undefined,
           direction: p.direction ?? undefined,
-        })),
+        }))
+        .filter((p) => Number.isFinite(p.lng) && Number.isFinite(p.lat));
+      if (!validPoints.length) continue;
+
+      const meta = sessions.value.find((s) => String(s.id) === String(id));
+      result.push({
+        id: String(id),
+        deviceId: meta?.device_id || points[0]?.device_id || '',
+        title: meta?.title || `轨迹 #${id}`,
+        color: '#52c41a',
+        points: validPoints,
       });
     }
     return result;

@@ -81,6 +81,21 @@ def _location_fields_for_device(camera: Device) -> dict:
     }
 
 
+def _gb_attribute_fields_for_device(camera: Device) -> dict:
+    """GB28181 通道目录属性（PTZ 能力 / 结构 / 方位 / 业务分类），供地图区分与筛选。"""
+    return {
+        'support_move': camera.support_move,
+        'support_zoom': camera.support_zoom,
+        'ptz_type': camera.ptz_type,
+        'direction_type': camera.direction_type,
+        'position_type': camera.position_type,
+        'room_type': camera.room_type,
+        'use_type': camera.use_type,
+        'supply_light_type': camera.supply_light_type,
+        'resolution': camera.resolution,
+    }
+
+
 def _apply_location_updates(camera: Device, update_info: dict) -> None:
     """处理位置字段更新；允许显式传 null/空字符串清除。"""
     if not any(k in update_info for k in _LOCATION_FIELD_KEYS):
@@ -1566,6 +1581,7 @@ def list_devices_for_map(*, directory_id=None, has_location_only=True) -> list:
             'source': device.source,
             'directory_id': device.directory_id,
             'online': _to_dict(device).get('online'),
+            **_gb_attribute_fields_for_device(device),
             **loc,
             **nvr_fields_for_device(device),
         })

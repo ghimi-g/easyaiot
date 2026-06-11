@@ -60,9 +60,19 @@ export async function searchPoi(params: {
   });
 
   const url = `${SEARCH_BASE}?postStr=${encodeURIComponent(postStr)}&type=query&tk=${key}`;
-  const response = await fetch(url);
-  const data = await response.json();
-  const resultList: Record<string, unknown>[] = data.result || data.pois || [];
+
+  let data: Record<string, unknown>;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`天地图搜索请求失败：${response.status}`);
+    data = await response.json();
+  } catch (e) {
+    // 网络异常 / 配额超限(返回非 JSON) / 跨域失败，统一返回空结果，避免上层未捕获崩溃
+    console.warn('[TiandituMap] POI 搜索失败：', e);
+    return { items: [], total: 0 };
+  }
+  const resultList: Record<string, unknown>[] = (data.result as Record<string, unknown>[])
+    || (data.pois as Record<string, unknown>[]) || [];
 
   const items = resultList
     .map((item) => {
@@ -81,7 +91,7 @@ export async function searchPoi(params: {
     })
     .filter((item) => item.name && item.name !== '未知地点');
 
-  return { items, total: data.count || resultList.length };
+  return { items, total: Number(data.count) || resultList.length };
 }
 
 export async function reverseGeocode(params: LngLat & { key?: string }): Promise<string> {
@@ -90,14 +100,22 @@ export async function reverseGeocode(params: LngLat & { key?: string }): Promise
 
   const postStr = JSON.stringify({ lon: lng, lat, ver: 1 });
   const url = `${GEOCODER_BASE}?postStr=${encodeURIComponent(postStr)}&type=geocode&tk=${key}`;
-  const response = await fetch(url);
-  const data = await response.json();
 
-  if (data?.result?.formatted_address) {
-    return data.result.formatted_address;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`天地图逆地理编码失败：${response.status}`);
+    const data = await response.json();
+
+    if (data?.result?.formatted_address) {
+      return data.result.formatted_address;
+    }
+
+    const comp = data?.result?.addressComponent || {};
+    const parts = [comp.province, comp.city, comp.district, comp.street, comp.streetNumber].filter(Boolean);
+    return parts.join('');
+  } catch (e) {
+    // 失败时返回空地址，调用方据此回退到坐标显示，不中断点选流程
+    console.warn('[TiandituMap] 逆地理编码失败：', e);
+    return '';
   }
-
-  const comp = data?.result?.addressComponent || {};
-  const parts = [comp.province, comp.city, comp.district, comp.street, comp.streetNumber].filter(Boolean);
-  return parts.join('');
 }

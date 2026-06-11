@@ -1,13 +1,18 @@
 import { onBeforeUnmount, ref, shallowRef, type Ref } from 'vue';
 import Map from 'ol/Map';
 import View from 'ol/View';
-import { ScaleLine } from 'ol/control';
+import { FullScreen, OverviewMap, ScaleLine, Zoom } from 'ol/control';
 import { fromLonLat } from 'ol/proj';
 import type { MapBrowserEvent } from 'ol';
 import type BaseLayer from 'ol/layer/Base';
 import { createTiandituBaseLayers } from '../core/tiandituLayers';
 import { toWgs84 } from '../core/coordUtils';
-import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM } from '../constants';
+import {
+  DEFAULT_MAP_CENTER,
+  DEFAULT_MAP_ZOOM,
+  TIANDITU_MIN_ZOOM,
+  TIANDITU_VIEW_MAX_ZOOM,
+} from '../constants';
 import type { LngLat, TiandituBaseMapType } from '../types';
 
 const MIN_MAP_PX = 8;
@@ -17,6 +22,12 @@ export interface UseOpenLayersMapOptions {
   zoom?: number;
   baseMapType?: TiandituBaseMapType;
   showScaleLine?: boolean;
+  /** 缩放 +/- 按钮（默认开） */
+  showZoom?: boolean;
+  /** 全屏按钮（默认开） */
+  showFullScreen?: boolean;
+  /** 鹰眼/缩略图（默认关，弹窗等小地图不建议开） */
+  showOverview?: boolean;
   onClick?: (payload: LngLat & { mercator: [number, number] }) => void;
   onReady?: () => void;
 }
@@ -123,6 +134,23 @@ export function useOpenLayersMap(
     }
   }
 
+  function buildControls() {
+    const controls: Array<ScaleLine | Zoom | FullScreen | OverviewMap> = [];
+    if (options.showZoom !== false) controls.push(new Zoom());
+    if (options.showScaleLine !== false) controls.push(new ScaleLine());
+    if (options.showFullScreen !== false) {
+      controls.push(new FullScreen({ tipLabel: '全屏 / 退出全屏' }));
+    }
+    if (options.showOverview) {
+      controls.push(new OverviewMap({
+        collapsed: true,
+        tipLabel: '鹰眼',
+        layers: createTiandituBaseLayers('vec').slice(0, 1),
+      }));
+    }
+    return controls;
+  }
+
   function initMap() {
     if (!containerRef.value || map.value) return false;
     if (!isContainerReady()) return false;
@@ -137,8 +165,10 @@ export function useOpenLayersMap(
         center: fromLonLat(options.center ?? DEFAULT_MAP_CENTER),
         zoom: options.zoom ?? DEFAULT_MAP_ZOOM,
         projection: 'EPSG:3857',
+        minZoom: TIANDITU_MIN_ZOOM,
+        maxZoom: TIANDITU_VIEW_MAX_ZOOM,
       }),
-      controls: options.showScaleLine !== false ? [new ScaleLine()] : [],
+      controls: buildControls(),
     });
 
     if (options.onClick) {
@@ -169,6 +199,8 @@ export function useOpenLayersMap(
     return initMap();
   }
 
+  let labelVisible = true;
+
   function switchBaseMap(type: TiandituBaseMapType) {
     if (!map.value) return;
     baseMapType.value = type;
@@ -176,7 +208,25 @@ export function useOpenLayersMap(
     baseLayers.forEach((layer) => map.value!.removeLayer(layer));
     baseLayers = createTiandituBaseLayers(type);
     baseLayers.forEach((layer, index) => {
+      if (layer.get('tdtRole') === 'label') layer.setVisible(labelVisible);
       map.value!.getLayers().insertAt(index, layer);
+    });
+  }
+
+  /** 注记层显隐（地名/道路注记开关） */
+  function setLabelVisible(visible: boolean) {
+    labelVisible = visible;
+    baseLayers.forEach((layer) => {
+      if (layer.get('tdtRole') === 'label') layer.setVisible(visible);
+    });
+  }
+
+  /** 复位到默认中心/缩放 */
+  function resetView(duration = 400) {
+    map.value?.getView().animate({
+      center: fromLonLat(options.center ?? DEFAULT_MAP_CENTER),
+      zoom: options.zoom ?? DEFAULT_MAP_ZOOM,
+      duration,
     });
   }
 
@@ -220,6 +270,8 @@ export function useOpenLayersMap(
     tryInitMap,
     updateSize,
     switchBaseMap,
+    setLabelVisible,
+    resetView,
     addOverlayLayer,
     removeOverlayLayer,
     flyTo,

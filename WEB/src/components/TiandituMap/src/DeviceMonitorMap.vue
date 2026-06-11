@@ -3,7 +3,13 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import BasicTiandituMap from './BasicTiandituMap.vue';
 import MapFloatToolbar from './components/MapFloatToolbar.vue';
 import MapToolbarStat from './components/MapToolbarStat.vue';
+import { Checkbox } from 'ant-design-vue';
+import MapSearchBox from './components/MapSearchBox.vue';
+import MapLegend from './components/MapLegend.vue';
+import MapCursorInfo from './components/MapCursorInfo.vue';
+import MapCategoryFilter from './components/MapCategoryFilter.vue';
 import { useMapMarkers } from '../composables/useMapMarkers';
+import { useMapDisplayFilters } from '../composables/useMapDisplayFilters';
 import { useDeviceMapData } from '../business/useDeviceMapData';
 import type { MapMarkerData, TiandituBaseMapType } from '../types';
 
@@ -13,11 +19,14 @@ const props = withDefaults(defineProps<{
   height?: string;
   autoFit?: boolean;
   enableCluster?: boolean;
+  /** 同坐标聚合点展开后，点击叶子是否自动收起（默认 false=保持展开） */
+  spiderfyCollapseOnSelect?: boolean;
 }>(), {
   filterOnline: null,
   height: '100%',
   autoFit: true,
   enableCluster: true,
+  spiderfyCollapseOnSelect: false,
 });
 
 const emit = defineEmits<{
@@ -31,31 +40,50 @@ const cardBodyStyle = computed(() => ({
 }));
 
 const mapRef = ref<InstanceType<typeof BasicTiandituMap> | null>(null);
+const mapInstance = computed(() => mapRef.value?.map ?? null);
 const baseMapType = ref<TiandituBaseMapType>('vec');
+const showLabel = ref(true);
+const { offlineOnly, categoryFilter, apply: applyDisplayFilters } = useMapDisplayFilters();
 const deviceData = useDeviceMapData();
 
 const markers = useMapMarkers({
-  map: computed(() => mapRef.value?.map ?? null),
+  map: mapInstance,
   onMarkerClick: (m) => emit('marker-click', m),
   enableCluster: computed(() => props.enableCluster),
+  collapseSpiderOnSelect: computed(() => props.spiderfyCollapseOnSelect),
 });
 
+function handleSearchSelect(p: { lng: number; lat: number }) {
+  mapRef.value?.flyTo(p.lng, p.lat, 16);
+}
+
 const markerCount = computed(() => markers.markers.value.length);
+const offlineCount = computed(() => deviceData.devices.value.filter((d) => d.online === false).length);
+
+function displayMarkers(): MapMarkerData[] {
+  return applyDisplayFilters(deviceData.toMarkers(props.filterOnline));
+}
 
 async function refresh() {
   await deviceData.load({
     directory_id: props.directoryId,
     has_location: true,
   });
-  markers.setMarkers(deviceData.toMarkers(props.filterOnline));
+  markers.setMarkers(displayMarkers());
   if (props.autoFit) markers.fitToMarkers();
   await nextTick();
   mapRef.value?.updateSize?.();
   requestAnimationFrame(() => mapRef.value?.updateSize?.());
 }
 
+watch([offlineOnly, categoryFilter], () => markers.setMarkers(displayMarkers()), { deep: true });
+
 watch(baseMapType, (type) => {
   mapRef.value?.switchBaseMap(type);
+});
+
+watch(showLabel, (v) => {
+  mapRef.value?.setLabelVisible?.(v);
 });
 
 onMounted(() => {
@@ -76,6 +104,10 @@ function handleFitAll() {
   markers.fitToMarkers();
 }
 
+function handleReset() {
+  mapRef.value?.resetView?.();
+}
+
 defineExpose({
   refresh,
   devices: deviceData.devices,
@@ -93,18 +125,29 @@ defineExpose({
     class="device-monitor-map"
   >
     <a-spin :spinning="deviceData.loading.value" wrapper-class-name="device-monitor-map__spin">
-      <BasicTiandituMap ref="mapRef" :show-toolbar="false" @ready="refresh">
+      <BasicTiandituMap ref="mapRef" :show-toolbar="false" show-overview @ready="refresh">
         <MapFloatToolbar
           v-model:base-map-type="baseMapType"
+          v-model:show-label="showLabel"
           :loading="deviceData.loading.value"
           @refresh="refresh"
           @fit="handleFitAll"
+          @reset="handleReset"
         >
           <template #tags>
+            <MapSearchBox @select="handleSearchSelect" />
             <MapToolbarStat variant="camera" label="摄像头" :count="markerCount" />
             <MapToolbarStat v-if="deviceData.error.value" variant="error" :value="deviceData.error.value" />
           </template>
+          <template #extra>
+            <Checkbox v-model:checked="offlineOnly" class="device-monitor-map__offline">
+              只看离线<span v-if="offlineCount" class="device-monitor-map__muted">({{ offlineCount }})</span>
+            </Checkbox>
+            <MapCategoryFilter v-model="categoryFilter" />
+          </template>
         </MapFloatToolbar>
+        <MapLegend :show-alert="false" />
+        <MapCursorInfo :map="mapInstance" />
       </BasicTiandituMap>
     </a-spin>
   </a-card>
@@ -119,6 +162,11 @@ defineExpose({
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 1px 4px rgb(0 0 0 / 4%);
+
+  &__muted {
+    margin-left: 2px;
+    color: rgba(0, 0, 0, 0.4);
+  }
 
   &:deep(.ant-card) {
     height: 100%;
