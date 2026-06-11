@@ -9,7 +9,7 @@ import {defHttp} from '@/utils/http/axios';
 const ALGORITHM_PREFIX = '/video/algorithm';
 
 // 通用请求封装
-const commonApi = <T = any>(method: 'get' | 'post' | 'delete' | 'put', url: string, options: { params?: any; data?: any; errorMessageMode?: 'none' | 'message' | 'modal' } = {}) => {
+const commonApi = <T = any>(method: 'get' | 'post' | 'delete' | 'put', url: string, options: { params?: any; data?: any; errorMessageMode?: 'none' | 'message' | 'modal'; timeout?: number } = {}) => {
   defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
 
   return defHttp[method]({
@@ -18,6 +18,8 @@ const commonApi = <T = any>(method: 'get' | 'post' | 'delete' | 'put', url: stri
       // @ts-ignore
       ignoreCancelToken: true,
     },
+    // 单接口超时覆盖（默认全局 10s）：停止/启动/重启需要等待进程清理，耗时较长
+    ...(options.timeout ? { timeout: options.timeout } : {}),
     ...(method === 'get' ? { params: options.params } : { data: options.data || options.params }),
   }, {
     isTransformResponse: true,
@@ -178,21 +180,24 @@ export const deleteAlgorithmTask = (task_id: number) => {
 export const startAlgorithmTask = (task_id: number) => {
   return commonApi<{ code: number; msg: string; data: AlgorithmTask }>(
     'post',
-    `${ALGORITHM_PREFIX}/task/${task_id}/start`
+    `${ALGORITHM_PREFIX}/task/${task_id}/start`,
+    { timeout: 30000 }
   );
 };
 
 export const stopAlgorithmTask = (task_id: number) => {
   return commonApi<{ code: number; msg: string; data: AlgorithmTask }>(
     'post',
-    `${ALGORITHM_PREFIX}/task/${task_id}/stop`
+    `${ALGORITHM_PREFIX}/task/${task_id}/stop`,
+    { timeout: 30000 }
   );
 };
 
 export const restartAlgorithmTask = (task_id: number) => {
   return commonApi<{ code: number; msg: string; data: AlgorithmTask }>(
     'post',
-    `${ALGORITHM_PREFIX}/task/${task_id}/restart`
+    `${ALGORITHM_PREFIX}/task/${task_id}/restart`,
+    { timeout: 30000 }
   );
 };
 

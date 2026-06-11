@@ -8,6 +8,7 @@ import {
   isGb28181Device,
   shouldPlayViaGb28181,
 } from './deviceLabel';
+import { isProtectedStreamUrl, signStreamUrl } from './streamTicket';
 
 export type DevicePlayModalOpener = (visible: boolean, data: Record<string, any>) => void;
 
@@ -62,6 +63,28 @@ export function rewriteStreamUrlForBrowser(url: string): string {
   }
 }
 
+/**
+ * 将流地址的主机名+端口改写为当前页面的 host（hostname:port），便于浏览器拉流。
+ * 例如页面在 http://localhost:8888 打开时，
+ * http://33.150.1.104:8080/ai/xxx.flv -> http://localhost:8888/ai/xxx.flv
+ * 仅替换 host，协议与路径保持不变。
+ */
+export function rewriteStreamHostToPageHost(url: string): string {
+  const trimmed = url?.trim();
+  if (!trimmed || typeof window === 'undefined') return trimmed;
+
+  try {
+    const parsed = new URL(trimmed);
+    const pageHost = window.location.host;
+    if (!pageHost) return trimmed;
+
+    parsed.host = pageHost;
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
 /** RTMP 转 HTTP-FLV（Jessibuca 浏览器端需 HTTP/WS 地址） */
 export function convertRtmpToHttp(rtmpUrl: string): string | null {
   const trimmed = rtmpUrl?.trim();
@@ -83,10 +106,10 @@ export function convertRtmpToHttp(rtmpUrl: string): string | null {
 function toBrowserPlayUrl(stream?: string | null): string | null {
   const trimmed = stream?.trim();
   if (!trimmed) return null;
-  if (trimmed.startsWith('rtmp://')) {
-    return convertRtmpToHttp(trimmed);
-  }
-  return rewriteStreamUrlForBrowser(trimmed);
+  const httpUrl = trimmed.startsWith('rtmp://') ? convertRtmpToHttp(trimmed) : trimmed;
+  if (!httpUrl) return null;
+  // 所有播放地址统一走当前页面 host:port，便于不同环境下浏览器直接拉流
+  return rewriteStreamHostToPageHost(httpUrl);
 }
 
 /** 是否为算法任务输出的 AI 流（检测框烧录在此路流上） */
@@ -116,8 +139,17 @@ export async function probeStreamPlayable(
   url: string,
   timeoutMs = AI_STREAM_PROBE_MS,
 ): Promise<boolean> {
-  const target = url?.trim();
+  let target = url?.trim();
   if (!target || typeof window === 'undefined') return false;
+  // 探测直连 fetch /ai 地址，受 secure_link 保护，需先签名（开启强制校验时未签名恒 403）。
+  // 签发失败则降级探测未签名地址：强制校验关闭时仍能正常探测，开启时会 403 -> 探测返回 false -> 回退原始流。
+  if (isProtectedStreamUrl(target)) {
+    try {
+      target = await signStreamUrl(target);
+    } catch {
+      /* 降级：保留未签名地址继续探测 */
+    }
+  }
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {

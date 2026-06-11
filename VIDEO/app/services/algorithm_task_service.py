@@ -1118,16 +1118,30 @@ def stop_algorithm_task(task_id: int):
         task.run_status = 'stopped'
         task.updated_at = datetime.utcnow()
         db.session.commit()
-        
-        # 停止任务相关的服务（抽帧器、推送器、排序器）
-        try:
-            from app.services.algorithm_task_launcher_service import stop_all_task_services
-            stop_all_task_services(task_id)
-        except Exception as e:
-            logger.warning(f"停止任务 {task_id} 的服务时出错: {str(e)}", exc_info=True)
-            # 不抛出异常，允许任务停止但服务可能未停止
-        
-        logger.info(f"停止算法任务成功: task_id={task_id}")
+
+        # 停止任务相关的服务（抽帧器、推送器、排序器）放到后台线程执行。
+        # 进程清理（daemon.stop 的 SIGTERM 等待最长 10s + 孤儿进程 cleanup）耗时较长，
+        # 若同步执行会阻塞 HTTP 请求超过前端 10s 超时，导致前端报超时但后端仍在停止。
+        # 任务状态此处已提交（is_enabled=False / run_status=stopped），故清理可异步完成。
+        # 该线程只做进程管理，不访问数据库/Flask 上下文，无需 app context。
+        import threading
+
+        def _teardown(tid: int):
+            try:
+                from app.services.algorithm_task_launcher_service import stop_all_task_services
+                stop_all_task_services(tid)
+            except Exception as e:
+                logger.warning(f"停止任务 {tid} 的服务时出错: {str(e)}", exc_info=True)
+                # 不抛出异常，允许任务停止但服务可能未停止
+
+        threading.Thread(
+            target=_teardown,
+            args=(task_id,),
+            daemon=True,
+            name=f"stop-task-{task_id}",
+        ).start()
+
+        logger.info(f"停止算法任务成功(服务清理已转后台执行): task_id={task_id}")
         return task
     except Exception as e:
         db.session.rollback()
