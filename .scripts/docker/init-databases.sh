@@ -8,22 +8,25 @@ set -e
 SQL_DIR="/docker-entrypoint-initdb.d"
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 
-# 数据库和 SQL 文件映射（使用函数模拟关联数组，兼容 bash 3.2）
+# 数据库清单按命名规约自动发现：<名字>10.sql -> 库 <名字>20
+# （与 install_middleware_linux.sh init_databases() 及 schema-sync 同一规约）
+# 新增模块只需在挂载目录放一个 *10.sql，无需再改本脚本的硬编码清单。
 get_sql_file() {
     case "$1" in
-        "ruoyi-vue-pro20") echo "ruoyi-vue-pro10.sql" ;;
-        "iot-device20") echo "iot-device10.sql" ;;
-        "iot-message20") echo "iot-message10.sql" ;;
-        "iot-video20") echo "iot-video10.sql" ;;
-        "iot-ai20") echo "iot-ai10.sql" ;;
-        "iot-gb2818120") echo "iot-gb2818110.sql" ;;
-        "iot-node20") echo "iot-node10.sql" ;;
+        *20) echo "${1%20}10.sql" ;;
         *) echo "" ;;
     esac
 }
 
-# 数据库列表
-DATABASES=("ruoyi-vue-pro20" "iot-device20" "iot-message20" "iot-video20" "iot-ai20" "iot-gb2818120" "iot-node20")
+# 扫描 SQL_DIR 下所有 *10.sql 推导库名（兼容 bash 3.2，不依赖关联数组）
+DATABASES=()
+for _f in "$SQL_DIR"/*10.sql; do
+    [ -e "$_f" ] || continue
+    _base="$(basename "$_f" .sql)"
+    case "$_base" in
+        *10) DATABASES+=("${_base%10}20") ;;
+    esac
+done
 
 echo "=========================================="
 echo "开始初始化 PostgreSQL 数据库"

@@ -262,9 +262,7 @@ cd /path/to/easyaiot/.scripts/postgresql/schema-sync
    - 交互确认后：`CREATE DATABASE` → 剥除库级语句后**全量导入**（含表结构与 `COPY` 种子数据，单事务，失败自动回收半成品库）。
    - 不带 `--apply` 为 dry-run，仅提示将要创建。
 3. **建库后**：该库进入"已存在"状态，**后续的结构变更**用本脚本常规增量同步（[场景 1](#场景-1同步某个已有数据库的表结构)）即可。
-4. 🔴 **别忘了登记 install 清单**：`--create-missing` 解决的是**当前这台服务器**；全新装机走的 install 流程库清单仍是**硬编码**，必须同步登记（库名 + SQL 文件），否则新环境不会自动创建该库：
-   - `.scripts/docker/init-databases.sh`
-   - `.scripts/docker/install_middleware_linux.sh` 的 `init_databases()`
+4. ✅ **install 流程已同样自动发现**：`init-databases.sh` 与 `install_middleware_linux.sh` 的 `init_databases()` 均按 `*10.sql` 规约自动扫描——新增库**无需在任何清单登记**，全新装机也会自动创建（前提：服务器部署的是新版脚本）。
 
 #### 验证库是否已创建
 
@@ -273,7 +271,7 @@ docker exec -e PGPASSWORD=iot45722414822 postgres-server \
     psql -U postgres -d postgres -c "\l" | grep iot-<新模块>20
 ```
 
-> ℹ️ 一句话：**新库 `--create-missing` 一键建（并在 install 清单登记），老库 sync 增量改。**
+> ℹ️ 一句话：**放一个 `*10.sql` 就是接入；当前服务器用 `--create-missing` 立即建，全新装机由 install 自动建。**
 
 ---
 

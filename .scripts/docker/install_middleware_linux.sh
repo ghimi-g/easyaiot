@@ -156,9 +156,25 @@ fi
 
 # 计算 compose up/pull 需要操作的服务列表。
 # 未跳过 GPUStack 时返回空（表示操作全部服务）；跳过时返回除 GPUStack 外的所有 compose 服务名。
+# 结果进程内缓存：`compose config` 要解析整个 compose 文件（约 1~2s），一次运行内不会变化
 compose_service_args() {
     [ "$SKIP_GPUSTACK" != "true" ] && return 0
-    $COMPOSE_CMD -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -vx "GPUStack" | tr '\n' ' '
+    if [ -z "${_COMPOSE_SVC_ARGS:-}" ]; then
+        _COMPOSE_SVC_ARGS=$($COMPOSE_CMD -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -vx "GPUStack" | tr '\n' ' ')
+    fi
+    printf '%s' "$_COMPOSE_SVC_ARGS"
+}
+
+# 以特权执行命令：root 直接执行；非 root 且有 sudo 走 sudo；两者皆无则原样尝试。
+# 统一全文反复出现的 EUID/sudo 三分支样板（语义与原三分支完全一致）。
+run_priv() {
+    if [ "$EUID" -eq 0 ]; then
+        "$@"
+    elif command -v sudo &> /dev/null; then
+        sudo "$@"
+    else
+        "$@"
+    fi
 }
 
 # 日志输出函数（去掉颜色代码后写入日志文件）
@@ -543,9 +559,13 @@ install_nvidia_container_toolkit() {
         return 1
     fi
     
-    # 第五步：验证安装
+    # 第五步：验证安装（轮询 docker daemon 就绪，最长 15s，就绪即继续）
     print_info "验证安装..."
-    sleep 2  # 等待服务启动
+    local _dw=0
+    while [ $_dw -lt 15 ] && ! docker info > /dev/null 2>&1; do
+        sleep 1
+        _dw=$((_dw + 1))
+    done
     
     if command -v nvidia-container-runtime &> /dev/null; then
         local runtime_path=$(which nvidia-container-runtime)
@@ -2044,10 +2064,39 @@ check_filesystem_mount_status() {
     return 0  # 可写
 }
 
+# GPUStack 容器内 SSL 私钥权限检测修复（先检测再修改）。
+# 内嵌 postgres 开启 ssl，要求 /etc/ssl/private/ssl-cert-snakeoil.key 为
+# 0600(属主为数据库用户) 或 0640(属主 root)；该文件在容器可写层（非宿主机挂载），
+# 层被污染（如容器内调试时 chmod 过）后 docker restart 不会复原，需 exec 修复。
+# 彻底复原方式是重建容器（rw 层重置、gpustack_data 数据不受影响）：
+#   $COMPOSE_CMD -f docker-compose.yml up -d --force-recreate GPUStack
+fix_gpustack_ssl_key_permissions() {
+    local key="/etc/ssl/private/ssl-cert-snakeoil.key"
+
+    docker ps --format '{{.Names}}' | grep -q '^gpustack-server$' || return 0
+
+    local mode
+    mode=$(docker exec gpustack-server stat -c '%a' "$key" 2>/dev/null || echo "")
+    [ -z "$mode" ] && return 0   # 文件不存在或容器暂不可 exec：交给重建容器处理
+    case "$mode" in
+        600|640) return 0 ;;     # 已合规，零操作
+    esac
+
+    print_warning "GPUStack 容器内 SSL 私钥权限为 $mode（要求 600/640），正在修复..."
+    # 还原为 Debian 镜像默认：root:ssl-cert 0640（postgres 经 ssl-cert 组读取）
+    docker exec gpustack-server chown root:ssl-cert "$key" 2>/dev/null || true
+    docker exec gpustack-server chmod 640 "$key" 2>/dev/null || true
+    print_success "GPUStack SSL 私钥权限已修复（仍异常时可重建容器: up -d --force-recreate GPUStack）"
+}
+
 # GPUStack 内嵌 PostgreSQL 要求 PGDATA 为 0700/0750，777 会导致 postgres 拒绝启动。
 # 注意：此操作又快又是正确性关键，即使 SKIP_GPUSTACK=true 也必须执行（仅在目录存在时生效），
 # 否则残留的 777 权限会让 gpustack-server 的内嵌 PG 一直拒绝启动。
 fix_gpustack_postgresql_permissions() {
+    # SSL 私钥与 PGDATA 同为内嵌 PG 的启动阻断项，且互相独立（PGDATA 正常时私钥也可能被污染），
+    # 借同一调用链一并检测（检测式，正常时零开销）
+    fix_gpustack_ssl_key_permissions
+
     local gpustack_pg_root="${SCRIPT_DIR}/gpustack_data/postgresql"
     local gpustack_pg_data="${gpustack_pg_root}/data"
 
@@ -2065,13 +2114,7 @@ fix_gpustack_postgresql_permissions() {
 
     print_warning "GPUStack 内嵌 PostgreSQL 数据目录权限为 ${data_mode:-未知}（要求 0700/0750），正在修复为 0750..."
 
-    if [ "$EUID" -eq 0 ]; then
-        chmod 750 "$gpustack_pg_root" "$gpustack_pg_data" 2>/dev/null || true
-    elif command -v sudo &> /dev/null; then
-        sudo chmod 750 "$gpustack_pg_root" "$gpustack_pg_data" 2>/dev/null || true
-    else
-        chmod 750 "$gpustack_pg_root" "$gpustack_pg_data" 2>/dev/null || true
-    fi
+    run_priv chmod 750 "$gpustack_pg_root" "$gpustack_pg_data" 2>/dev/null || true
 
     print_success "GPUStack PostgreSQL 数据目录权限已修复为 0750"
 }
@@ -2097,15 +2140,9 @@ set_gpustack_data_permissions() {
         recurse="false"
     fi
 
-    if [ "$EUID" -eq 0 ]; then
-        chmod 777 "$gpustack_dir" 2>/dev/null || true
-        [ "$recurse" = "true" ] && find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
-    elif command -v sudo &> /dev/null; then
-        sudo chmod 777 "$gpustack_dir" 2>/dev/null || true
-        [ "$recurse" = "true" ] && sudo find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
-    else
-        chmod 777 "$gpustack_dir" 2>/dev/null || true
-        [ "$recurse" = "true" ] && find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
+    run_priv chmod 777 "$gpustack_dir" 2>/dev/null || true
+    if [ "$recurse" = "true" ]; then
+        run_priv find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
     fi
 
     fix_gpustack_postgresql_permissions
@@ -2216,21 +2253,14 @@ create_all_storage_directories() {
         if [ $mkdir_exit_code -eq 0 ]; then
             # 如果指定了 UID/GID，尝试设置权限
             if [ -n "$uid" ] && [ -n "$gid" ]; then
-                if [ "$EUID" -eq 0 ]; then
-                    chown $R "${uid}:${gid}" "$dir_path" 2>/dev/null || true
-                    chmod $R 777 "$dir_path" 2>/dev/null || true
-                elif command -v sudo &> /dev/null; then
-                    sudo chown $R "${uid}:${gid}" "$dir_path" 2>/dev/null || true
-                    sudo chmod $R 777 "$dir_path" 2>/dev/null || true
-                fi
+                run_priv chown $R "${uid}:${gid}" "$dir_path" 2>/dev/null || true
+                run_priv chmod $R 777 "$dir_path" 2>/dev/null || true
             else
                 # 即使没有指定 UID/GID，也设置777权限（GPUStack 内嵌 PG 除外）
                 if [ "$dir_path" = "${SCRIPT_DIR}/gpustack_data" ]; then
                     set_gpustack_data_permissions "$pre_existing"
-                elif [ "$EUID" -eq 0 ]; then
-                    chmod $R 777 "$dir_path" 2>/dev/null || true
-                elif command -v sudo &> /dev/null; then
-                    sudo chmod $R 777 "$dir_path" 2>/dev/null || true
+                else
+                    run_priv chmod $R 777 "$dir_path" 2>/dev/null || true
                 fi
             fi
             created_count=$((created_count + 1))
@@ -2279,11 +2309,7 @@ create_all_storage_directories() {
     [ "$FORCE_CHMOD" = "true" ] && PR="-R"
     for parent_dir in "${parent_dirs[@]}"; do
         if [ -d "$parent_dir" ]; then
-            if [ "$EUID" -eq 0 ]; then
-                chmod $PR 777 "$parent_dir" 2>/dev/null || true
-            elif command -v sudo &> /dev/null; then
-                sudo chmod $PR 777 "$parent_dir" 2>/dev/null || true
-            fi
+            run_priv chmod $PR 777 "$parent_dir" 2>/dev/null || true
         fi
     done
 
@@ -2292,19 +2318,8 @@ create_all_storage_directories() {
     # （/data 下含本仓库及全部 docker 数据，递归 chmod 会扫描海量文件导致严重卡顿）
     # playbacks 同样不递归：录像无限增长，新文件可删性由 SRS 容器入口 umask 0000 保证
     # （与 fix_srs.sh / srs-entrypoint.sh / install_middleware_mac.sh 约定一致）
-    if [ "$EUID" -eq 0 ]; then
-        mkdir -p /data/playbacks 2>/dev/null || true
-        chmod 777 /data 2>/dev/null || true
-        chmod 777 /data/playbacks 2>/dev/null || true
-    elif command -v sudo &> /dev/null; then
-        sudo mkdir -p /data/playbacks 2>/dev/null || true
-        sudo chmod 777 /data 2>/dev/null || true
-        sudo chmod 777 /data/playbacks 2>/dev/null || true
-    else
-        mkdir -p /data/playbacks 2>/dev/null || true
-        chmod 777 /data 2>/dev/null || true
-        chmod 777 /data/playbacks 2>/dev/null || true
-    fi
+    run_priv mkdir -p /data/playbacks 2>/dev/null || true
+    run_priv chmod 777 /data /data/playbacks 2>/dev/null || true
     
     if [ $created_count -eq $total_count ]; then
         print_success "所有存储目录已创建并设置为777权限（${created_count}/${total_count}）"
@@ -3165,11 +3180,7 @@ create_dify_storage_directories() {
 
     for dir_path in "${dify_dirs[@]}"; do
         mkdir -p "$dir_path" 2>/dev/null || true
-        if [ "$EUID" -eq 0 ]; then
-            chmod -R 777 "$dir_path" 2>/dev/null || true
-        elif command -v sudo &>/dev/null; then
-            sudo chmod -R 777 "$dir_path" 2>/dev/null || true
-        fi
+        run_priv chmod -R 777 "$dir_path" 2>/dev/null || true
     done
 }
 
@@ -3270,24 +3281,9 @@ ensure_host_data_directory_before_srs() {
     # 注意：只对 /data 顶层和 /data/playbacks 设权限，绝不对整个 /data 分区递归
     # （/data 下含本仓库及全部 docker 数据，递归 chmod 会扫描海量文件导致严重卡顿）
     local created=0
-    if [ "$EUID" -eq 0 ]; then
-        if mkdir -p /data/playbacks 2>/dev/null; then
-            chmod 777 /data 2>/dev/null || true
-            chmod 777 /data/playbacks 2>/dev/null || true
-            created=1
-        fi
-    elif command -v sudo &>/dev/null; then
-        if sudo mkdir -p /data/playbacks 2>/dev/null; then
-            sudo chmod 777 /data 2>/dev/null || true
-            sudo chmod 777 /data/playbacks 2>/dev/null || true
-            created=1
-        fi
-    else
-        if mkdir -p /data/playbacks 2>/dev/null; then
-            chmod 777 /data 2>/dev/null || true
-            chmod 777 /data/playbacks 2>/dev/null || true
-            created=1
-        fi
+    if run_priv mkdir -p /data/playbacks 2>/dev/null; then
+        run_priv chmod 777 /data /data/playbacks 2>/dev/null || true
+        created=1
     fi
     if [ "$created" -eq 1 ]; then
         print_success "宿主机目录已就绪: /data（含 playbacks 子目录）"
@@ -3474,9 +3470,7 @@ reset_postgresql_password() {
         return 1
     fi
     
-    # 额外等待，确保数据库完全就绪
-    print_info "等待数据库完全初始化..."
-    sleep 5
+    # wait_for_postgresql 已用 pg_isready 确认可接受连接，无需再固定等待 5s
     
     # 从 docker-compose.yml 中读取配置的密码
     local target_password="iot45722414822"
@@ -3943,7 +3937,7 @@ wait_for_kafka() {
     if [ -z "$container_status" ]; then
         print_warning "Kafka 容器未运行，尝试启动..."
         docker start kafka-server > /dev/null 2>&1 || true
-        sleep 5
+        # 无需固定 sleep：下方 while 循环本身就是就绪轮询
     fi
     
     while [ $attempt -lt $max_attempts ]; do
@@ -4929,17 +4923,24 @@ init_databases() {
         print_warning "Nacos 未就绪，将跳过 Nacos 密码重置确认步骤"
     fi
     
-    # 定义数据库和 SQL 文件映射
-    # SQL 文件路径：相对于脚本目录的上一级目录的 postgresql 目录
+    # 数据库清单按命名规约自动发现：<名字>10.sql -> 库 <名字>20
+    # （与 schema-sync/sync_schema_migra.sh 同一规约）。新增模块只需在
+    # .scripts/postgresql/ 放一个 *10.sql，无需再改本脚本的硬编码清单。
     local sql_dir="$(cd "${SCRIPT_DIR}/../postgresql" && pwd)"
     declare -A DB_SQL_MAP
-    DB_SQL_MAP["iot-ai20"]="${sql_dir}/iot-ai10.sql"
-    DB_SQL_MAP["iot-device20"]="${sql_dir}/iot-device10.sql"
-    DB_SQL_MAP["iot-video20"]="${sql_dir}/iot-video10.sql"
-    DB_SQL_MAP["ruoyi-vue-pro20"]="${sql_dir}/ruoyi-vue-pro10.sql"
-    DB_SQL_MAP["iot-message20"]="${sql_dir}/iot-message10.sql"
-    DB_SQL_MAP["iot-gb2818120"]="${sql_dir}/iot-gb2818110.sql"
-    DB_SQL_MAP["iot-node20"]="${sql_dir}/iot-node10.sql"
+    local _sqlf _base
+    for _sqlf in "$sql_dir"/*10.sql; do
+        [ -e "$_sqlf" ] || continue
+        _base="$(basename "$_sqlf" .sql)"
+        case "$_base" in
+            *10) DB_SQL_MAP["${_base%10}20"]="$_sqlf" ;;
+        esac
+    done
+    if [ ${#DB_SQL_MAP[@]} -eq 0 ]; then
+        print_warning "未在 $sql_dir 发现任何 *10.sql 文件，跳过数据库初始化"
+        return 0
+    fi
+    print_info "自动发现 ${#DB_SQL_MAP[@]} 个库: ${!DB_SQL_MAP[*]}"
     
     local success_count=0
     local total_count=${#DB_SQL_MAP[@]}
@@ -6045,9 +6046,7 @@ install_middleware() {
     print_dify_info "  首次安装: http://localhost:${DIFY_HTTP_PORT}/install"
     print_dify_info "  部署日志: ${DIFY_LOG_FILE}"
     echo ""
-    print_info "等待服务启动..."
-    sleep 10
-    
+    # 不再固定 sleep 10：下方 ensure_postgresql_password 内部自带 wait_for_postgresql 精确等待
     # 确保 PostgreSQL 密码正确（确保重启后密码正确）
     echo ""
     ensure_postgresql_password
@@ -6205,9 +6204,8 @@ restart_middleware() {
     
     print_success "所有中间件重启完成"
     echo ""
-    print_info "等待服务就绪..."
-    sleep 15
-
+    # 不再固定 sleep 15：下方 init_kafka_iot_topics / ensure_postgresql_password
+    # 各自带就绪轮询（Kafka while 重试、PG wait_for_postgresql），按需精确等待
     echo ""
     init_kafka_iot_topics || print_warning "IoT Kafka 主题初始化未完成"
     
