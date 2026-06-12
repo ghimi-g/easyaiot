@@ -3184,15 +3184,39 @@ create_dify_storage_directories() {
     done
 }
 
-# 拉取 Dify 所需镜像
+# 拉取 Dify 所需镜像——仅拉取本地缺失的。
+# 全部已存在时零网络请求：原先无条件 `dify_compose pull` 每次都全量联表镜像源，
+# 源端一个 blob 抖动/超时就把"本可纯离线启动"的部署搞失败，且慢。
 check_and_pull_dify_images() {
     if [ ! -f "$DIFY_COMPOSE_FILE" ]; then
         return 0
     fi
 
     print_dify_info "检查 Dify 镜像..."
-    if ! dify_compose pull 2>&1 | tee -a "$DIFY_LOG_FILE"; then
-        print_dify_warning "部分 Dify 镜像拉取失败，启动时将自动重试"
+    # compose v2 用 config --images 枚举镜像清单；v1 回退解析 config 输出
+    local imgs img
+    local missing=()
+    imgs=$(dify_compose config --images 2>/dev/null) \
+        || imgs=$(dify_compose config 2>/dev/null | awk '$1=="image:"{print $2}')
+    if [ -z "$imgs" ]; then
+        print_dify_warning "无法枚举 Dify 镜像清单，跳过预拉取（up 时会按需拉取）"
+        return 0
+    fi
+    for img in $imgs; do
+        docker image inspect "$img" >/dev/null 2>&1 || missing+=("$img")
+    done
+    if [ ${#missing[@]} -eq 0 ]; then
+        print_dify_success "Dify 镜像均已存在，跳过拉取"
+        return 0
+    fi
+    print_dify_info "缺失 ${#missing[@]} 个镜像，开始拉取: ${missing[*]}"
+    local fail=0
+    for img in "${missing[@]}"; do
+        docker pull "$img" 2>&1 | tee -a "$DIFY_LOG_FILE"
+        [ "${PIPESTATUS[0]}" -ne 0 ] && fail=1
+    done
+    if [ "$fail" -ne 0 ]; then
+        print_dify_warning "部分 Dify 镜像拉取失败，up 时将自动重试"
         return 1
     fi
     print_dify_success "Dify 镜像检查完成"
@@ -3254,7 +3278,9 @@ deploy_dify() {
     check_and_pull_dify_images || true
 
     print_dify_info "启动 Dify 服务（project=${DIFY_PROJECT_NAME}）..."
-    if ! dify_compose up -d 2>&1 | tee -a "$DIFY_LOG_FILE"; then
+    # 取 PIPESTATUS[0]（tee 恒 0，`if 管道` 检测不到 up 失败）
+    dify_compose up -d 2>&1 | tee -a "$DIFY_LOG_FILE"
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
         print_dify_error "Dify 启动失败"
         return 1
     fi
@@ -4963,42 +4989,40 @@ init_databases() {
         echo ""
     done
     
-    # 等待用户手动配置 Nacos 密码
+    # Nacos 账号配置：先自动初始化 admin（新库无内置账号），再用 API 实测登录验证；
+    # 全部通过则零人工介入。仅当验证失败（已有 admin 但密码与预期不一致）才回退人工确认。
     echo ""
     if wait_for_nacos; then
-        print_section "Nacos 密码配置确认"
-        echo ""
-        print_info "请手动登录 Nacos 管理界面配置密码："
-        print_info "  访问地址: http://localhost:8848/nacos"
-        print_info "  用户名: nacos"
-        echo ""
-        print_warning "${RED}重要提示：${NC}新版本 Nacos 初始页面需要设置密码，请将密码配置为："
-        print_warning "${YELLOW}basiclab@iot78475418754${NC}"
-        echo ""
-        print_warning "请确保已经完成密码配置，然后继续..."
-        echo ""
-        
-        while true; do
-            echo -ne "${YELLOW}[提示]${NC} 是否已经完成 Nacos 密码配置（密码必须为: basiclab@iot78475418754）？(y/N): "
-            read -r response
-            case "$response" in
-                [yY][eE][sS]|[yY])
-                    print_success "确认已配置 Nacos 密码，继续执行..."
-                    break
-                    ;;
-                [nN][oO]|[nN]|"")
-                    print_error "请先完成 Nacos 密码配置后再继续"
-                    print_info "您可以："
-                    print_info "  1. 访问 http://localhost:8848/nacos 进行密码配置"
-                    print_info "  2. 密码必须设置为: basiclab@iot78475418754"
-                    print_info "  3. 配置完成后重新运行此脚本"
-                    exit 1
-                    ;;
-                *)
-                    print_warning "请输入 y 或 N"
-                    ;;
-            esac
-        done
+        ensure_nacos_admin_user
+        if curl -s -m 5 -X POST "http://localhost:8848/nacos/v1/auth/login" \
+            --data-urlencode "username=nacos" --data-urlencode "password=${NACOS_INIT_PASSWORD}" 2>/dev/null \
+            | grep -q '"accessToken"'; then
+            print_success "Nacos 账号验证通过（用户 nacos，密码与各服务 bootstrap 一致）"
+        else
+            print_section "Nacos 密码配置确认"
+            print_warning "自动验证未通过：Nacos 已有 admin 账号但密码与预期不一致"
+            print_info "请登录 http://localhost:8848/nacos 将 nacos 用户密码改为："
+            print_warning "${YELLOW}basiclab@iot78475418754${NC}"
+            echo ""
+            while true; do
+                echo -ne "${YELLOW}[提示]${NC} 是否已经完成 Nacos 密码配置（密码必须为: basiclab@iot78475418754）？(y/N): "
+                read -r response
+                case "$response" in
+                    [yY][eE][sS]|[yY])
+                        print_success "确认已配置 Nacos 密码，继续执行..."
+                        break
+                        ;;
+                    [nN][oO]|[nN]|"")
+                        print_error "请先完成 Nacos 密码配置后再继续"
+                        print_info "配置完成后重新运行此脚本"
+                        exit 1
+                        ;;
+                    *)
+                        print_warning "请输入 y 或 N"
+                        ;;
+                esac
+            done
+        fi
     fi
     
     echo ""
@@ -5053,23 +5077,32 @@ check_and_pull_images() {
         fi
     done <<< "$compose_config"
     
-    # 检查每个镜像是否存在
+    # 检查每个镜像是否存在（记录缺失清单，后面只拉缺失的）
+    local missing_list=()
     for image in "${images_to_check[@]}"; do
         if docker image inspect "$image" &> /dev/null; then
-            print_info "镜像已存在: $image"
             existing_images=$((existing_images + 1))
         else
             print_warning "镜像不存在: $image"
-            missing_images=$((missing_images + 1))
+            missing_list+=("$image")
         fi
     done
-    
-    # 如果有缺失的镜像，才执行拉取
+    missing_images=${#missing_list[@]}
+
+    # 只拉缺失的镜像：原先缺 1 个就全量 compose pull，会为已存在的十几个镜像逐一联源比对，
+    # 慢且被镜像源网络质量绑架（源端一个 blob 超时即整体失败）
     if [ $missing_images -gt 0 ]; then
-        print_info "发现 $missing_images 个缺失镜像，开始拉取..."
-        print_info "已存在 $existing_images 个镜像，跳过拉取"
-        $COMPOSE_CMD -f "$COMPOSE_FILE" pull $(compose_service_args) 2>&1 | tee -a "$LOG_FILE"
-        print_success "镜像拉取完成"
+        print_info "已存在 $existing_images 个镜像；缺失 $missing_images 个，仅拉取缺失镜像: ${missing_list[*]}"
+        local _pull_img _pull_fail=0
+        for _pull_img in "${missing_list[@]}"; do
+            docker pull "$_pull_img" 2>&1 | tee -a "$LOG_FILE"
+            [ "${PIPESTATUS[0]}" -ne 0 ] && _pull_fail=1
+        done
+        if [ "$_pull_fail" -eq 0 ]; then
+            print_success "缺失镜像拉取完成"
+        else
+            print_warning "部分镜像拉取失败，up 时将自动重试（不影响已有镜像的服务启动）"
+        fi
     else
         if [ ${#images_to_check[@]} -gt 0 ]; then
             print_success "所有所需镜像已存在（${#images_to_check[@]} 个），跳过拉取步骤（节省时间）"
@@ -5900,6 +5933,81 @@ cleanup_stale_containers() {
         done
         sleep 1
     fi
+
+    cleanup_renamed_containers
+    fix_nacos_derby_corruption
+}
+
+# 清理 compose recreate 被中断后遗留的「改名孤儿容器」（形如 <12位hex>_postgres-server）。
+# recreate 时 compose 先把旧容器改名让出 container_name，中途被打断旧容器就残留；
+# 它的服务标签仍在 compose 文件中，下次 up 会把它当正主——若仍在运行还占着端口/数据目录。
+# 上面的 cleanup_stale_containers 只清 exited 容器，覆盖不到「仍在运行」的改名孤儿，故单列。
+cleanup_renamed_containers() {
+    local names
+    names=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^[0-9a-f]{12}_[a-z]+-(server|init|worker)$' || true)
+    [ -z "$names" ] && return 0
+    print_warning "清理上次中断遗留的改名孤儿容器: $(echo "$names" | tr '\n' ' ')"
+    echo "$names" | xargs -r docker rm -f >/dev/null 2>&1 || true
+}
+
+# Nacos 单机内嵌 Derby 库「半成品损坏」自愈：首次建库中途被打断 → 缺 service.properties，
+# 容器 restart:always 死循环（重启的是同一容器，坏数据在可写层里永远修不好）。
+# nacos 的 /home/nacos/data 未挂载卷 → 强制重建容器即拿到干净可写层，自动恢复。
+# 仅当容器当前非 healthy 且日志命中特征串才介入；健康时开销 ≈ 一次 docker inspect（毫秒级）。
+fix_nacos_derby_corruption() {
+    local health
+    health=$(docker inspect -f '{{.State.Health.Status}}' nacos-server 2>/dev/null) || return 0
+    [ "$health" = "healthy" ] && return 0
+    docker logs --tail 200 nacos-server 2>&1 | grep -q "does not contain the expected 'service.properties'" || return 0
+    print_warning "检测到 Nacos 内嵌 Derby 半成品损坏（初始化曾被中断），删除容器及其匿名卷后重建..."
+    # 必须 docker rm -v 连匿名卷一起删：镜像若对 /home/nacos/data 声明了 VOLUME（匿名卷），
+    # compose --force-recreate 默认会把旧容器的匿名卷原样带给新容器（除非 --renew-anon-volumes），
+    # 坏的 derby-data 随卷复活——实测单纯重建容器修不掉，删容器+匿名卷才彻底。
+    docker rm -f -v nacos-server >/dev/null 2>&1 || true
+    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d Nacos 2>&1 | tee -a "$LOG_FILE" || true
+}
+
+# Nacos 2.2.1+ 开启鉴权后不再内置默认账号：全新数据卷（首次安装或 Derby 修复重建后）里
+# 没有任何用户，业务服务登录会报 "User nacos not found"。
+# /v1/auth/users/admin 仅在尚无 admin 用户时可匿名调用；已有 admin 时返回错误且不做修改（幂等安全）。
+# 密码必须与各服务 bootstrap-*.yaml 的 spring.cloud.nacos.*.password 一致。
+NACOS_INIT_PASSWORD="${NACOS_INIT_PASSWORD:-basiclab@iot78475418754}"
+ensure_nacos_admin_user() {
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^nacos-server$' || return 0
+    # 等待 nacos 就绪（新建容器约 30-60s；已就绪时首轮即通过，常态开销≈一次curl）
+    local i resp
+    for i in $(seq 1 45); do
+        curl -s -m 2 "http://localhost:8848/nacos/actuator/health" >/dev/null 2>&1 && break
+        sleep 2
+    done
+    resp=$(curl -s -m 5 -X POST "http://localhost:8848/nacos/v1/auth/users/admin" \
+        --data-urlencode "password=${NACOS_INIT_PASSWORD}" 2>/dev/null || true)
+    echo "$resp" | grep -q '"username"' || return 0   # 已有 admin（常态）→ 静默返回
+    print_success "Nacos admin 用户已初始化（用户 nacos，密码与服务 bootstrap 一致）"
+    # 业务服务的注册/配置均指向 namespace dev（ID 必须为 dev），新库须一并补建
+    local token
+    token=$(curl -s -m 5 -X POST "http://localhost:8848/nacos/v1/auth/login" \
+        --data-urlencode "username=nacos" --data-urlencode "password=${NACOS_INIT_PASSWORD}" 2>/dev/null \
+        | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p')
+    [ -z "$token" ] && return 0
+    curl -s -m 5 -X POST "http://localhost:8848/nacos/v1/console/namespaces?accessToken=${token}" \
+        -d "customNamespaceId=dev&namespaceName=dev&namespaceDesc=dev" >/dev/null 2>&1 || true
+    print_info "Nacos 命名空间 dev 已创建"
+}
+
+# up 失败时自动展示 unhealthy 容器：健康检查最后输出 + 容器日志尾部，免手动逐个排查。
+# 健康检查输出很关键——部分服务（如 TDengine 的 taos CLI 探测）失败原因只出现在这里，容器日志里看不到。
+show_unhealthy_containers() {
+    local names n
+    names=$(docker ps --filter "health=unhealthy" --format '{{.Names}}' 2>/dev/null || true)
+    [ -z "$names" ] && return 0
+    for n in $names; do
+        print_warning "unhealthy 容器: $n —— 健康检查最后输出："
+        docker inspect --format '{{range .State.Health.Log}}[exit={{.ExitCode}}] {{.Output}}{{end}}' "$n" 2>/dev/null | tail -n 5 || true
+        print_warning "$n 日志尾部："
+        docker logs --tail 30 "$n" 2>&1 | tail -30 || true
+        echo ""
+    done
 }
 
 # 安装所有中间件
@@ -5957,11 +6065,18 @@ install_middleware() {
     
     print_section "启动 Milvus 等中间件容器"
     print_info "启动所有中间件服务..."
-    if $COMPOSE_CMD -f "$COMPOSE_FILE" up -d $(compose_service_args) 2>&1 | tee -a "$LOG_FILE"; then
+    # 取 PIPESTATUS[0] 判定（tee 恒 0，`if 管道` 永远走成功分支，失败会被掩盖）
+    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d $(compose_service_args) 2>&1 | tee -a "$LOG_FILE"
+    _up_rc=${PIPESTATUS[0]}
+    if [ "${_up_rc}" -eq 0 ]; then
         print_success "容器启动命令执行完成"
     else
-        print_error "容器启动过程中出现错误"
+        print_error "容器启动过程中出现错误（compose 退出码 ${_up_rc}），unhealthy 容器自动诊断："
+        show_unhealthy_containers
     fi
+
+    # Nacos 全新数据卷需初始化 admin 账号与 dev 命名空间（幂等，已初始化则瞬时跳过）
+    ensure_nacos_admin_user
     
     # 如果 SRS 容器已经在运行，重启它以重新加载配置文件
     if docker ps --filter "name=srs-server" --format "{{.Names}}" | grep -q "srs-server"; then
@@ -6118,8 +6233,15 @@ start_middleware() {
     
     print_info "启动所有中间件服务..."
     $COMPOSE_CMD -f "$COMPOSE_FILE" up -d 2>&1 | tee -a "$LOG_FILE"
+    _up_rc=${PIPESTATUS[0]}
+    ensure_nacos_admin_user
     
-    print_success "所有中间件启动完成"
+    if [ "${_up_rc:-0}" -eq 0 ]; then
+        print_success "所有中间件启动完成"
+    else
+        print_error "部分中间件启动失败（compose 退出码 ${_up_rc}），unhealthy 容器自动诊断："
+        show_unhealthy_containers
+    fi
     echo ""
     init_kafka_iot_topics || print_warning "IoT Kafka 主题初始化未完成"
     echo ""
@@ -6608,10 +6730,19 @@ update_middleware() {
     echo ""
     check_and_pull_images
     
+    cleanup_renamed_containers
+    fix_nacos_derby_corruption
     print_info "重启所有中间件服务..."
     $COMPOSE_CMD -f "$COMPOSE_FILE" up -d $(compose_service_args) 2>&1 | tee -a "$LOG_FILE"
+    _up_rc=${PIPESTATUS[0]}   # 必须紧跟管道取退出码：tee 恒 0，直接判管道会把失败误报成成功
+    ensure_nacos_admin_user
 
-    print_success "所有中间件更新完成"
+    if [ "${_up_rc}" -eq 0 ]; then
+        print_success "所有中间件更新完成"
+    else
+        print_error "部分中间件更新失败（compose 退出码 ${_up_rc}），unhealthy 容器自动诊断："
+        show_unhealthy_containers
+    fi
     echo ""
     print_section "检查 Milvus 向量数据库"
     wait_for_milvus || print_warning "Milvus 未就绪"

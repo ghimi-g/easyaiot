@@ -57,6 +57,33 @@ compose_service_count() {
     $DOCKER_COMPOSE -f "$COMPOSE_FILE" config --services 2>/dev/null | wc -l | tr -d '[:space:]'
 }
 
+# 清理 compose recreate 被中断后遗留的「改名孤儿容器」（形如 <12位hex>_iot-xxx）。
+# recreate 时 compose 先把旧容器改名让出 container_name，再建新容器；中途被打断旧容器就残留。
+# 它的服务标签仍指向 compose 文件里的服务，下次 up 会把它当正主、等它的健康检查——
+# 旧配置旧镜像极易 unhealthy，卡死 depends_on(service_healthy) 整条依赖链；
+# 注意 --remove-orphans 清不掉它（只清「服务已从 compose 文件移除」的孤儿），必须主动删除。
+cleanup_renamed_containers() {
+    local names
+    names=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^[0-9a-f]{12}_iot-' || true)
+    [ -z "$names" ] && return 0
+    print_warning "清理上次中断遗留的改名孤儿容器: $(echo "$names" | tr '\n' ' ')"
+    echo "$names" | xargs -r docker rm -f >/dev/null 2>&1 || true
+}
+
+# up 前重启本项目 unhealthy 的容器。
+# 典型场景：业务容器在依赖（如 Nacos 账号、中间件）修复【之前】启动，nacos 客户端重试一段时间后
+# 放弃，应用进入僵死态（不再重试、永远 unhealthy）；而 up -d 不会动"配置未变的运行中容器"，
+# 于是 depends_on(service_healthy) 无论重试多少次 update 都卡死。重启让应用带着已修复的依赖重新初始化。
+restart_unhealthy_containers() {
+    local names n
+    names=$(docker ps --filter "health=unhealthy" --format '{{.Names}}' 2>/dev/null | grep -E '^iot-' || true)
+    [ -z "$names" ] && return 0
+    for n in $names; do
+        print_warning "容器 $n 处于 unhealthy，自动重启以重新连接依赖..."
+        docker restart "$n" >/dev/null 2>&1 || true
+    done
+}
+
 # 后台启动 compose 服务。
 # TTY 下 compose 会用 \r 刷新 [+] up x/y，分母残留时易显示成 9/100（实际共 10 个服务）。
 compose_up_detached() {
@@ -67,7 +94,22 @@ compose_up_detached() {
     else
         print_info "正在启动服务..."
     fi
-    COMPOSE_ANSI=never $DOCKER_COMPOSE -f "$COMPOSE_FILE" up -d --no-color "$@"
+    cleanup_renamed_containers
+    restart_unhealthy_containers
+    # --remove-orphans：顺带清理「已从 compose 文件移除的服务」的残留容器
+    COMPOSE_ANSI=never $DOCKER_COMPOSE -f "$COMPOSE_FILE" up -d --no-color --remove-orphans "$@"
+}
+
+# up 失败时自动展示 unhealthy 容器及其日志尾部，免去手动逐个排查
+show_unhealthy_containers() {
+    local names n
+    names=$(docker ps --filter "health=unhealthy" --format '{{.Names}}' 2>/dev/null | grep -i "iot" || true)
+    [ -z "$names" ] && return 0
+    for n in $names; do
+        print_warning "unhealthy 容器: $n，日志尾部："
+        docker logs --tail 30 "$n" 2>&1 | tail -30 || true
+        echo ""
+    done
 }
 
 # 检查docker-compose.yml是否存在
@@ -725,6 +767,7 @@ build_and_start() {
     # 检查命令是否成功
     if [ $exit_code -ne 0 ]; then
         print_error "服务启动失败（退出码: $exit_code）"
+        show_unhealthy_containers
         exit 1
     fi
     
@@ -967,6 +1010,7 @@ update_services() {
     # 检查命令是否成功
     if [ $exit_code -ne 0 ]; then
         print_error "服务更新失败（退出码: $exit_code）"
+        show_unhealthy_containers
         exit 1
     fi
     

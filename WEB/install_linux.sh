@@ -52,6 +52,18 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# 清理 compose recreate 被中断后遗留的「改名孤儿容器」（形如 <12位hex>_web-service）。
+# recreate 时 compose 先把旧容器改名让出 container_name，中途被打断旧容器就残留；
+# 它若仍在运行会占住宿主机端口，新容器起不来。--remove-orphans 清不掉它
+# （只清「服务已从 compose 文件移除」的孤儿），须在 up 前按名主动删除。
+cleanup_renamed_containers() {
+    local names
+    names=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^[0-9a-f]{12}_web-service$' || true)
+    [ -z "$names" ] && return 0
+    print_warning "清理上次中断遗留的改名孤儿容器: $(echo "$names" | tr '\n' ' ')"
+    echo "$names" | xargs -r docker rm -f >/dev/null 2>&1 || true
+}
+
 # 检查命令是否存在
 check_command() {
     if ! command -v "$1" &> /dev/null; then
@@ -532,19 +544,20 @@ install_service() {
     create_directories
     create_env_file
     
+    # 先清理本服务的残留容器（含改名孤儿）：运行中的旧容器/孤儿占着端口，必须在端口检查前清掉，
+    # 否则 check_port 会把"自己即将替换的容器"误判为端口冲突，卡在交互确认上
+    print_info "检查并清理残留容器..."
+    docker rm -f web-service 2>/dev/null || true
+    $COMPOSE_CMD down --remove-orphans 2>/dev/null || true
+
     # 检查端口占用
     if ! check_port; then
         print_error "端口检查失败，请解决端口占用问题后重试"
         exit 1
     fi
-    
+
     # 注意：前端构建现在在Docker容器内完成，不再需要在宿主机上构建
     print_info "前端构建将在Docker容器内自动完成"
-    
-    # 确保先清理可能存在的残留容器
-    print_info "检查并清理残留容器..."
-    docker rm -f web-service 2>/dev/null || true
-    $COMPOSE_CMD down --remove-orphans 2>/dev/null || true
     
     print_info "构建 Docker 镜像（根据代码重新构建）..."
     docker_build_image -t web-service:latest .
@@ -580,14 +593,17 @@ start_service() {
         create_env_file
     fi
     
+    # 先清改名孤儿：运行中的孤儿占着端口，必须在端口检查之前清掉
+    cleanup_renamed_containers
+
     # 检查端口占用
     if ! check_port; then
         print_error "端口检查失败，请解决端口占用问题后重试"
         exit 1
     fi
-    
+
     # 注意：前端构建现在在Docker容器内完成，不再需要检查宿主机的dist目录
-    $COMPOSE_CMD up -d
+    $COMPOSE_CMD up -d --remove-orphans
     print_success "服务已启动"
     check_status
 }
@@ -747,7 +763,8 @@ update_service() {
         && git diff --quiet HEAD -- . 2>/dev/null; then
         print_success "代码无变更且镜像已存在，跳过前端重建"
         print_info "（如需强制重建：FORCE_REBUILD=1 ./install_linux.sh update）"
-        $COMPOSE_CMD up -d
+        cleanup_renamed_containers
+        $COMPOSE_CMD up -d --remove-orphans
         check_status
         return 0
     fi
@@ -758,7 +775,8 @@ update_service() {
 
     # 构建完成后才 up -d（旧容器在 build 全程持续运行），停机仅数秒
     print_info "应用新镜像..."
-    $COMPOSE_CMD up -d
+    cleanup_renamed_containers
+    $COMPOSE_CMD up -d --remove-orphans
 
     print_success "服务更新完成"
     check_status

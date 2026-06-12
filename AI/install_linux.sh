@@ -54,6 +54,18 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# 清理 compose recreate 被中断后遗留的「改名孤儿容器」（形如 <12位hex>_ai-service）。
+# recreate 时 compose 先把旧容器改名让出 container_name，中途被打断旧容器就残留；
+# 它若仍在运行会占住宿主机端口，新容器起不来。--remove-orphans 清不掉它
+# （只清「服务已从 compose 文件移除」的孤儿），须在 up 前按名主动删除。
+cleanup_renamed_containers() {
+    local names
+    names=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^[0-9a-f]{12}_ai-service$' || true)
+    [ -z "$names" ] && return 0
+    print_warning "清理上次中断遗留的改名孤儿容器: $(echo "$names" | tr '\n' ' ')"
+    echo "$names" | xargs -r docker rm -f >/dev/null 2>&1 || true
+}
+
 prepare_cached_resources_for_module() {
     local module="$1"
     init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
@@ -605,8 +617,9 @@ install_service() {
     print_success "AI 服务镜像构建完成！"
     
     print_info "启动服务..."
-    $COMPOSE_CMD up -d --quiet-pull 2>&1 | grep -v "^Creating\|^Starting\|^Pulling\|^Waiting\|^Container" || true
-    
+    cleanup_renamed_containers
+    $COMPOSE_CMD up -d --remove-orphans --quiet-pull 2>&1 | grep -v "^Creating\|^Starting\|^Pulling\|^Waiting\|^Container" || true
+
     print_success "服务安装完成！"
     print_info "等待服务启动..."
     sleep 5
@@ -631,7 +644,8 @@ start_service() {
         print_warning ".env.docker 文件不存在，正在创建..."
         create_env_file
     fi
-    $COMPOSE_CMD up -d --quiet-pull 2>&1 | grep -v "^Creating\|^Starting\|^Pulling\|^Waiting\|^Container" || true
+    cleanup_renamed_containers
+    $COMPOSE_CMD up -d --remove-orphans --quiet-pull 2>&1 | grep -v "^Creating\|^Starting\|^Pulling\|^Waiting\|^Container" || true
     print_success "服务已启动"
     check_status
 }
@@ -816,11 +830,13 @@ update_service() {
         echo ""
         print_success "AI 服务镜像构建完成！"
         print_info "应用新镜像（仅重建变更服务，最小化停机）..."
-        $COMPOSE_CMD up -d --no-deps --quiet-pull ai-service 2>&1 | grep -v "^Creating\|^Starting\|^Pulling\|^Waiting\|^Container" || true
+        cleanup_renamed_containers
+        $COMPOSE_CMD up -d --remove-orphans --no-deps --quiet-pull ai-service 2>&1 | grep -v "^Creating\|^Starting\|^Pulling\|^Waiting\|^Container" || true
     else
         print_success "依赖未变，跳过镜像构建（业务代码经卷挂载，重启进程即可生效）"
         # 确保容器存在并应用任何 compose 配置变更（首次启用源码挂载时会在此处重建一次）
-        $COMPOSE_CMD up -d --no-deps --quiet-pull ai-service 2>&1 | grep -v "^Creating\|^Starting\|^Pulling\|^Waiting\|^Container" || true
+        cleanup_renamed_containers
+        $COMPOSE_CMD up -d --remove-orphans --no-deps --quiet-pull ai-service 2>&1 | grep -v "^Creating\|^Starting\|^Pulling\|^Waiting\|^Container" || true
 
         # 是否需要重启进程以加载新源码：有新提交，或本地有未提交改动（git diff 脏）。
         # git diff --quiet HEAD 仅在出错或有已跟踪改动时返回非 0，用于捕获“改了代码没 commit”的场景；
