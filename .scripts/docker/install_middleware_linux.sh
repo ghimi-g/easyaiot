@@ -2055,24 +2055,34 @@ fix_gpustack_postgresql_permissions() {
         return 0
     fi
 
-    print_info "修复 GPUStack 内嵌 PostgreSQL 数据目录权限 (0750)..."
-
-    if [ "$EUID" -eq 0 ]; then
-        [ -d "$gpustack_pg_root" ] && chmod 750 "$gpustack_pg_root" 2>/dev/null || true
-        chmod 750 "$gpustack_pg_data" 2>/dev/null || true
-    elif command -v sudo &> /dev/null; then
-        [ -d "$gpustack_pg_root" ] && sudo chmod 750 "$gpustack_pg_root" 2>/dev/null || true
-        sudo chmod 750 "$gpustack_pg_data" 2>/dev/null || true
-    else
-        [ -d "$gpustack_pg_root" ] && chmod 750 "$gpustack_pg_root" 2>/dev/null || true
-        chmod 750 "$gpustack_pg_data" 2>/dev/null || true
+    # 先检测再修改：PGDATA 已是 0700/0750（postgres 接受的两种模式）则零操作、零日志，
+    # 仅在权限确实不对（如被旧版脚本递归 777 过）时才 chmod 修复
+    local data_mode
+    data_mode=$(stat -c '%a' "$gpustack_pg_data" 2>/dev/null || echo "")
+    if [ "$data_mode" = "700" ] || [ "$data_mode" = "750" ]; then
+        return 0
     fi
 
-    print_success "GPUStack PostgreSQL 数据目录权限已设置为 0750"
+    print_warning "GPUStack 内嵌 PostgreSQL 数据目录权限为 ${data_mode:-未知}（要求 0700/0750），正在修复为 0750..."
+
+    if [ "$EUID" -eq 0 ]; then
+        chmod 750 "$gpustack_pg_root" "$gpustack_pg_data" 2>/dev/null || true
+    elif command -v sudo &> /dev/null; then
+        sudo chmod 750 "$gpustack_pg_root" "$gpustack_pg_data" 2>/dev/null || true
+    else
+        chmod 750 "$gpustack_pg_root" "$gpustack_pg_data" 2>/dev/null || true
+    fi
+
+    print_success "GPUStack PostgreSQL 数据目录权限已修复为 0750"
 }
 
-# GPUStack 数据目录：除内嵌 PostgreSQL 外其余子目录仍用 777
+# GPUStack 数据目录：除内嵌 PostgreSQL 外其余子目录用 777
+# 参数1（可选）：目录在本次运行前是否已存在（true/false，默认 false=新建）
+# 与全局「已存在目录仅顶层 chmod」策略一致：已存在且未开 FORCE_CHMOD 时，
+# 跳过对模型缓存等大目录的递归 777（每次 update 全量递归正是卡顿来源）；
+# 内嵌 PG 权限始终走 fix_gpustack_postgresql_permissions 的"先检测再修复"。
 set_gpustack_data_permissions() {
+    local pre_existing="${1:-false}"
     # SKIP_GPUSTACK=true 时只跳过慢的 777 递归，仍必须修正内嵌 PG 权限（否则 gpustack-server 起不来）
     if [ "$SKIP_GPUSTACK" = "true" ]; then
         fix_gpustack_postgresql_permissions
@@ -2082,15 +2092,20 @@ set_gpustack_data_permissions() {
 
     mkdir -p "$gpustack_dir"
 
+    local recurse="true"
+    if [ "$pre_existing" = "true" ] && [ "$FORCE_CHMOD" != "true" ]; then
+        recurse="false"
+    fi
+
     if [ "$EUID" -eq 0 ]; then
         chmod 777 "$gpustack_dir" 2>/dev/null || true
-        find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
+        [ "$recurse" = "true" ] && find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
     elif command -v sudo &> /dev/null; then
         sudo chmod 777 "$gpustack_dir" 2>/dev/null || true
-        sudo find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
+        [ "$recurse" = "true" ] && sudo find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
     else
         chmod 777 "$gpustack_dir" 2>/dev/null || true
-        find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
+        [ "$recurse" = "true" ] && find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
     fi
 
     fix_gpustack_postgresql_permissions
@@ -2211,7 +2226,7 @@ create_all_storage_directories() {
             else
                 # 即使没有指定 UID/GID，也设置777权限（GPUStack 内嵌 PG 除外）
                 if [ "$dir_path" = "${SCRIPT_DIR}/gpustack_data" ]; then
-                    set_gpustack_data_permissions
+                    set_gpustack_data_permissions "$pre_existing"
                 elif [ "$EUID" -eq 0 ]; then
                     chmod $R 777 "$dir_path" 2>/dev/null || true
                 elif command -v sudo &> /dev/null; then
