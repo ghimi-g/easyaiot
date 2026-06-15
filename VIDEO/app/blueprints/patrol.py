@@ -154,10 +154,6 @@ def patch_session(session_id):
             session.focus_device_id = data.get('focus_device_id') or None
         if 'interval_sec' in data and data['interval_sec']:
             session.interval_sec = max(3, int(data['interval_sec']))
-        if 'patrol_mode' in data and data['patrol_mode']:
-            mode = str(data['patrol_mode']).lower()
-            if mode in ('rotate', 'pool', 'hybrid'):
-                session.patrol_mode = mode
         if 'pool_size' in data and data['pool_size']:
             session.pool_size = max(1, min(int(data['pool_size']), 16))
         db.session.commit()

@@ -22,7 +22,10 @@ const commonApi = <T = any>(
   ) as Promise<T>;
 };
 
-export type PatrolMode = 'rotate' | 'pool' | 'hybrid';
+/** 巡检固定使用连接池模式（并发拉流 + 共享推理，适合多路低频巡检） */
+export const DEFAULT_PATROL_MODE = 'pool' as const;
+
+export type PatrolMode = typeof DEFAULT_PATROL_MODE;
 
 export interface PatrolSession {
   id: number;

@@ -502,20 +502,6 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
       },
     },
     {
-      field: 'patrol_mode',
-      label: '巡检模式',
-      component: 'Select',
-      defaultValue: 'pool',
-      componentProps: {
-        options: [
-          { label: '连接池', value: 'pool' },
-          { label: '轮询', value: 'rotate' },
-          { label: '混合', value: 'hybrid' },
-        ],
-      },
-      ifShow: ({ values }) => values.task_type === 'patrol',
-    },
-    {
       field: 'patrol_interval_sec',
       label: '巡检间隔(秒)',
       component: 'InputNumber',
@@ -529,19 +515,7 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
       component: 'InputNumber',
       defaultValue: 4,
       componentProps: { min: 1, max: 16 },
-      ifShow: ({ values }) => values.task_type === 'patrol' && values.patrol_mode !== 'rotate',
-    },
-    {
-      field: 'focus_device_id',
-      label: '焦点摄像头',
-      component: 'Select',
-      componentProps: {
-        placeholder: '混合模式下的焦点路（可选）',
-        options: deviceOptions,
-        allowClear: true,
-        showSearch: true,
-      },
-      ifShow: ({ values }) => values.task_type === 'patrol' && values.patrol_mode === 'hybrid',
+      ifShow: ({ values }) => values.task_type === 'patrol',
     },
     {
       field: 'schedule_policy',
@@ -1441,6 +1415,11 @@ const handleSubmit = async () => {
       if (cronCheck.normalized) {
         values.cron_expression = cronCheck.normalized;
       }
+    }
+
+    if (values.task_type === 'patrol') {
+      values.patrol_mode = 'pool';
+      values.focus_device_id = null;
     }
 
     if (modalData.value.type === 'edit' && modalData.value.record) {

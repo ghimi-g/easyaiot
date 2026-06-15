@@ -518,12 +518,10 @@ def create_algorithm_task(task_name: str,
         elif task_type == 'patrol':
             cron_expression = None
             frame_skip = 25
-            if patrol_mode not in ('rotate', 'pool', 'hybrid'):
-                raise ValueError("巡检模式必须是 rotate、pool 或 hybrid")
+            patrol_mode = 'pool'
             patrol_interval_sec = max(3, int(patrol_interval_sec or 10))
             patrol_pool_size = max(1, min(int(patrol_pool_size or 4), 16))
-            if focus_device_id and focus_device_id not in device_id_list:
-                focus_device_id = None
+            focus_device_id = None
         else:
             cron_expression = None
             frame_skip = 25
@@ -816,8 +814,8 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
                 kwargs['cron_expression'] = None
             if 'space_id' in kwargs:
                 kwargs['space_id'] = None
-            if 'patrol_mode' in kwargs and kwargs['patrol_mode'] not in ('rotate', 'pool', 'hybrid'):
-                raise ValueError("巡检模式必须是 rotate、pool 或 hybrid")
+            kwargs['patrol_mode'] = 'pool'
+            kwargs['focus_device_id'] = None
             if 'patrol_interval_sec' in kwargs:
                 kwargs['patrol_interval_sec'] = max(3, int(kwargs['patrol_interval_sec'] or 10))
             if 'patrol_pool_size' in kwargs:

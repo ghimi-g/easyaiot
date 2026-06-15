@@ -83,10 +83,7 @@ def create_patrol_session(data: dict) -> PatrolSession:
         if not model_ids and task.model_ids:
             model_ids = _parse_id_list(task.model_ids)
 
-    patrol_mode = (data.get('patrol_mode') or 'pool').strip().lower()
-    if patrol_mode not in ('rotate', 'pool', 'hybrid'):
-        raise ValueError('patrol_mode 必须是 rotate、pool 或 hybrid')
-
+    patrol_mode = 'pool'
     interval_sec = max(3, int(data.get('interval_sec') or 10))
     pool_size = max(1, min(int(data.get('pool_size') or 4), 16))
 
@@ -97,7 +94,7 @@ def create_patrol_session(data: dict) -> PatrolSession:
         pool_size=pool_size,
         device_ids=json.dumps(device_ids),
         model_ids=json.dumps([int(x) for x in model_ids]),
-        focus_device_id=data.get('focus_device_id'),
+        focus_device_id=None,
         algorithm_task_id=algorithm_task_id,
         alert_event_enabled=bool(data.get('alert_event_enabled', True)),
         alert_event_suppress_time=int(data.get('alert_event_suppress_time') or 5),

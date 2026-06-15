@@ -68,13 +68,6 @@
 
             <div class="toolbar-section patrol-section">
               <Space size="small" wrap>
-                <Select
-                  v-model:value="patrolMode"
-                  size="middle"
-                  style="width: 96px"
-                  :disabled="patrolRunning"
-                  :options="patrolModeOptions"
-                />
                 <span class="patrol-label">间隔(s)</span>
                 <InputNumber
                   v-model:value="patrolIntervalSec"
@@ -260,10 +253,8 @@ import {
   createPatrolProgressEventSource,
   getPatrolDirectoryDevices,
   getPatrolSessionStats,
-  patchPatrolSession,
   startPatrolSession,
   stopPatrolSession,
-  type PatrolMode,
   type PatrolSession,
 } from '@/api/device/patrol';
 import { getModelPage } from '@/api/device/model';
@@ -282,12 +273,6 @@ const { createMessage } = useMessage();
 /** 勾选后点播 AI 流（检测框由算法任务烧录在此路流上） */
 const enableAi = ref(true);
 
-const patrolMode = ref<PatrolMode>('pool');
-const patrolModeOptions = [
-  { label: '连接池', value: 'pool' },
-  { label: '轮询', value: 'rotate' },
-  { label: '混合', value: 'hybrid' },
-];
 const patrolIntervalSec = ref(10);
 const patrolModelId = ref<number | undefined>(undefined);
 const patrolModelOptions = ref<{ label: string; value: number }[]>([]);
@@ -317,17 +302,6 @@ async function loadPatrolModelOptions() {
     patrolModelOptions.value = [];
   } finally {
     patrolModelsLoading.value = false;
-  }
-}
-
-async function syncPatrolFocusDevice() {
-  if (!patrolRunning.value || patrolMode.value !== 'hybrid' || !patrolSessionId.value) return;
-  const focusId = state.playCells[state.playerIdx]?.deviceId;
-  if (!focusId) return;
-  try {
-    await patchPatrolSession(patrolSessionId.value, { focus_device_id: focusId });
-  } catch {
-    // ignore
   }
 }
 
@@ -413,10 +387,8 @@ async function startPatrolWithDeviceIds(deviceIds: string[], sessionName: string
       session_name: sessionName,
       device_ids: deviceIds,
       model_ids: [patrolModelId.value],
-      patrol_mode: patrolMode.value,
       interval_sec: patrolIntervalSec.value,
       pool_size: Math.min(4, deviceIds.length),
-      focus_device_id: state.playCells[state.playerIdx]?.deviceId,
     });
     const session = (createRes?.data ?? createRes) as PatrolSession;
     patrolSessionId.value = session.id;
@@ -955,13 +927,6 @@ onMounted(() => {
   void loadPatrolModelOptions();
   document.addEventListener('fullscreenchange', handleFullscreenChange);
 });
-
-watch(
-  () => state.playerIdx,
-  () => {
-    void syncPatrolFocusDevice();
-  },
-);
 
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', handleFullscreenChange);
