@@ -1,3 +1,5 @@
+import { incrementPatchVersion } from '../../utils/modelVersionUtils';
+
 export const ACTIVE_TRAIN_STATUSES = ['preparing', 'Train', 'train', 'running', 'stopping'];
 
 export const RETRAINABLE_STATUSES = ['stopped', 'completed', 'error', 'failed'];
@@ -8,6 +10,47 @@ export function isTrainTaskActive(status?: string): boolean {
 
 export function canRetrainTrainTask(status?: string): boolean {
   return RETRAINABLE_STATUSES.includes(String(status || ''));
+}
+
+export function canPublishTrainTask(record?: {
+  status?: string;
+  minio_model_path?: string;
+}): boolean {
+  return String(record?.status || '') === 'completed' && !!(record?.minio_model_path || '').trim();
+}
+
+export function getPublishedModelId(record?: {
+  published_model_id?: number | string | null;
+  hyperparameters?: unknown;
+}): number | null {
+  if (record?.published_model_id != null) {
+    const id = Number(record.published_model_id);
+    return Number.isNaN(id) ? null : id;
+  }
+  const hp = parseTrainHyperparameters(record?.hyperparameters);
+  if (hp.published_model_id != null) {
+    const id = Number(hp.published_model_id);
+    return Number.isNaN(id) ? null : id;
+  }
+  return null;
+}
+
+export function getSuggestedPublishVersion(record?: {
+  suggested_publish_version?: string | null;
+  published_version?: string | null;
+  hyperparameters?: unknown;
+}): string {
+  if (record?.suggested_publish_version) {
+    return String(record.suggested_publish_version);
+  }
+  const hp = parseTrainHyperparameters(record?.hyperparameters);
+  if (hp.published_version) {
+    return incrementPatchVersion(String(hp.published_version));
+  }
+  if (record?.published_version) {
+    return incrementPatchVersion(String(record.published_version));
+  }
+  return '1.0.0';
 }
 
 export function canResumeTrainTask(record?: {
@@ -51,6 +94,8 @@ export function parseTrainHyperparameters(raw: unknown) {
       taskName: hp.task_base_name ?? '',
       datasetSource: hp.dataset_source ?? 'local',
       completed_epochs: hp.completed_epochs ?? 0,
+      published_model_id: hp.published_model_id ?? null,
+      published_version: hp.published_version ?? null,
     };
   } catch {
     return {};

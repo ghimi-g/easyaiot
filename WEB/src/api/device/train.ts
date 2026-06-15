@@ -79,3 +79,11 @@ export const uploadTrainDataset = (formData: FormData) => {
     },
   );
 };
+
+/** 将已完成训练任务的权重发布到模型管理 */
+export const publishTrainTask = (
+  taskId: number,
+  params?: { name?: string; version?: string; description?: string; auto_increment?: boolean },
+) => {
+  return commonApi('post', `${Api.TrainTask}/${taskId}/publish`, {data: params || {}});
+};

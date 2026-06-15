@@ -100,6 +100,14 @@
                   >
                     <Icon icon="ant-design:download-outlined" :size="15" color="#3B82F6" />
                   </div>
+                  <div
+                    v-if="canPublishTrainTask(item)"
+                    class="btn"
+                    :title="getPublishTooltip(item)"
+                    @click="handlePublish(item)"
+                  >
+                    <Icon icon="ant-design:cloud-upload-outlined" :size="15" color="#722ED1" />
+                  </div>
                   <Popconfirm
                     title="确定删除此训练任务?"
                     ok-text="是"
@@ -136,7 +144,7 @@ import {propTypes} from '@/utils/propTypes';
 import {isFunction} from '@/utils/is';
 import {Icon} from '@/components/Icon';
 import {getFormConfig} from '../TrainTaskList/Data';
-import {canResumeTrainTask, canRetrainTrainTask, isTrainTaskActive} from '../TrainTaskList/trainTaskUtils';
+import {canPublishTrainTask, canResumeTrainTask, canRetrainTrainTask, getPublishedModelId, isTrainTaskActive} from '../TrainTaskList/trainTaskUtils';
 
 defineOptions({name: 'TrainTaskCardList'});
 
@@ -147,7 +155,7 @@ const props = defineProps({
   api: propTypes.func,
 });
 
-const emit = defineEmits(['getMethod', 'viewLogs', 'viewResults', 'download', 'stop', 'resume', 'retrain', 'delete']);
+const emit = defineEmits(['getMethod', 'viewLogs', 'viewResults', 'download', 'stop', 'resume', 'retrain', 'delete', 'publish']);
 
 const data = ref<Record<string, unknown>[]>([]);
 const state = reactive({
@@ -386,6 +394,17 @@ function handleResume(record: Record<string, unknown>) {
 
 function handleDelete(record: Record<string, unknown>) {
   emit('delete', record);
+}
+
+function getPublishTooltip(record: Record<string, unknown>) {
+  const publishedModelId = getPublishedModelId(record as { published_model_id?: number; hyperparameters?: unknown });
+  return publishedModelId
+    ? `更新发布到模型管理（模型 ID: ${publishedModelId}）`
+    : '发布到模型管理';
+}
+
+function handlePublish(record: Record<string, unknown>) {
+  emit('publish', record);
 }
 </script>
 

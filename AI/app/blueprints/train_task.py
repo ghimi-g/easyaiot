@@ -8,13 +8,23 @@ import logging
 import os
 import re
 import shutil
+import tempfile
+import uuid
+from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
 import requests
 from flask import Blueprint, request, jsonify
 from sqlalchemy import desc, or_
+from sqlalchemy.exc import IntegrityError
 
-from db_models import db, TrainTask
+from app.services.minio_service import ModelService
+from app.utils.image_utils import download_default_model_image
+from app.utils.model_class_utils import (
+    dump_class_names_json,
+    extract_class_names_from_model,
+)
+from db_models import db, Model, TrainTask
 
 train_task_bp = Blueprint('train_task', __name__)
 logger = logging.getLogger(__name__)
@@ -297,9 +307,181 @@ def _task_can_resume(task: TrainTask) -> bool:
     return _resolve_train_checkpoint_path(model_dir) is not None
 
 
+def _normalize_model_version(version) -> str:
+    text = str(version or '').strip()
+    if text.lower().startswith('v'):
+        text = text[1:].lstrip()
+    return text or '1.0.0'
+
+
+def _parse_minio_url(url: str):
+    try:
+        parsed = urlparse(url)
+        path_parts = parsed.path.split('/')
+        if len(path_parts) >= 5 and path_parts[3] == 'buckets':
+            bucket_name = path_parts[4]
+        else:
+            return None, None
+        query_params = parse_qs(parsed.query)
+        object_key = query_params.get('prefix', [None])[0]
+        return bucket_name, object_key
+    except Exception as exc:
+        logger.error('解析 MinIO URL 失败: %s, error=%s', url, exc)
+        return None, None
+
+
+def _get_published_model_id(hp_text: str) -> int | None:
+    published_id = _parse_train_hyperparameters(hp_text).get('published_model_id')
+    if published_id is None:
+        return None
+    try:
+        return int(published_id)
+    except (TypeError, ValueError):
+        return None
+
+
+_SEMVER_RE = re.compile(r'^(\d+)\.(\d+)\.(\d+)(?:[.-].*)?$')
+
+
+def _parse_semver(version: str) -> tuple[int, int, int] | None:
+    normalized = _normalize_model_version(version)
+    match = _SEMVER_RE.match(normalized)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+
+def _format_semver(major: int, minor: int, patch: int) -> str:
+    return f'{major}.{minor}.{patch}'
+
+
+def _increment_patch_version(version: str) -> str:
+    parsed = _parse_semver(version)
+    if parsed:
+        major, minor, patch = parsed
+        return _format_semver(major, minor, patch + 1)
+    return '1.0.0'
+
+
+def _max_semver(versions: list[str]) -> str | None:
+    parsed_versions: list[tuple[tuple[int, int, int], str]] = []
+    for version in versions:
+        parsed = _parse_semver(version)
+        if parsed:
+            parsed_versions.append((parsed, _normalize_model_version(version)))
+    if not parsed_versions:
+        return None
+    parsed_versions.sort(key=lambda item: item[0])
+    return parsed_versions[-1][1]
+
+
+def _get_published_version(hp_text: str) -> str | None:
+    published_version = _parse_train_hyperparameters(hp_text).get('published_version')
+    if not published_version:
+        return None
+    normalized = _normalize_model_version(str(published_version))
+    return normalized or None
+
+
+def _resolve_next_publish_version(task: TrainTask, name: str) -> str:
+    """根据任务历史与同名校模型的最高版本，计算下一次发布的递增版本号。"""
+    candidate_versions: list[str] = []
+
+    published_version = _get_published_version(task.hyperparameters)
+    if published_version:
+        candidate_versions.append(published_version)
+
+    published_model_id = _get_published_model_id(task.hyperparameters)
+    if published_model_id:
+        published_model = Model.query.get(published_model_id)
+        if published_model and published_model.version:
+            candidate_versions.append(published_model.version)
+
+    same_name_models = Model.query.filter(
+        db.func.lower(Model.name) == db.func.lower(name),
+    ).all()
+    for model in same_name_models:
+        if model.version:
+            candidate_versions.append(model.version)
+
+    latest_version = _max_semver(candidate_versions)
+    if latest_version:
+        return _increment_patch_version(latest_version)
+    return '1.0.0'
+
+
+def _set_published_model_id(task: TrainTask, model_id: int, version: str) -> None:
+    hp = _parse_train_hyperparameters(task.hyperparameters)
+    hp['published_model_id'] = model_id
+    hp['published_version'] = _normalize_model_version(version)
+    task.hyperparameters = json.dumps(hp)
+
+
+def _default_publish_name(task: TrainTask) -> str:
+    base = resolve_task_base_name(task)
+    ds_name = (task.dataset_name or '').strip()
+    if ds_name and base == DEFAULT_TASK_BASE_NAME:
+        return ds_name
+    return base or _task_display_name(task)
+
+
+def _upload_default_model_image() -> str | None:
+    temp_dir = 'temp_uploads'
+    os.makedirs(temp_dir, exist_ok=True)
+    default_image_filename = f'default_model_{uuid.uuid4().hex}.png'
+    default_image_path = os.path.join(temp_dir, default_image_filename)
+    try:
+        if not download_default_model_image(default_image_path):
+            return None
+        bucket_name = 'models'
+        image_object_key = f'images/{default_image_filename}'
+        upload_success, _ = ModelService.upload_to_minio(
+            bucket_name, image_object_key, default_image_path
+        )
+        if upload_success:
+            return f'/api/v1/buckets/{bucket_name}/objects/download?prefix={image_object_key}'
+    except Exception as exc:
+        logger.warning('上传默认模型图片失败: %s', exc)
+    finally:
+        if os.path.exists(default_image_path):
+            try:
+                os.remove(default_image_path)
+            except OSError:
+                pass
+    return None
+
+
+def _extract_class_names_from_minio_model(model_url: str) -> list[str]:
+    bucket_name, object_key = _parse_minio_url(model_url)
+    if not bucket_name or not object_key:
+        return []
+
+    ext = os.path.splitext(object_key)[1] or '.pt'
+    temp_fd, temp_path = tempfile.mkstemp(suffix=ext)
+    os.close(temp_fd)
+    try:
+        success, error_msg = ModelService.download_from_minio(bucket_name, object_key, temp_path)
+        if not success:
+            logger.warning('下载训练权重失败，无法提取类别: %s', error_msg)
+            return []
+        return extract_class_names_from_model(temp_path)
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
 def _serialize_task(task: TrainTask) -> dict:
     completed_epochs = _get_completed_epochs(task.hyperparameters)
     can_resume = _task_can_resume(task)
+    published_model_id = _get_published_model_id(task.hyperparameters)
+    suggested_publish_version = None
+    if task.status == 'completed' and (task.minio_model_path or '').strip():
+        suggested_publish_version = _resolve_next_publish_version(
+            task, _default_publish_name(task),
+        )
     return {
         'id': task.id,
         'name': _task_display_name(task),
@@ -318,6 +500,9 @@ def _serialize_task(task: TrainTask) -> dict:
         'checkpoint_dir': task.checkpoint_dir,
         'completed_epochs': completed_epochs,
         'can_resume': can_resume,
+        'published_model_id': published_model_id,
+        'published_version': _get_published_version(task.hyperparameters),
+        'suggested_publish_version': suggested_publish_version,
     }
 
 
@@ -415,6 +600,125 @@ def train_detail(record_id):
             'code': 500,
             'msg': '服务器内部错误'
         }), 500
+
+
+@train_task_bp.route('/<int:record_id>/publish', methods=['POST'])
+def publish_train_task(record_id):
+    """将已完成训练任务的权重发布到模型管理，供推理与算法任务使用。"""
+    temp_path = None
+    try:
+        task = TrainTask.query.get(record_id)
+        if not task:
+            return jsonify({'code': 404, 'msg': f'训练记录ID {record_id} 不存在'}), 404
+
+        if task.status != 'completed':
+            return jsonify({'code': 400, 'msg': '仅已完成训练的任务可发布到模型管理'}), 400
+
+        model_url = (task.minio_model_path or '').strip()
+        if not model_url:
+            return jsonify({'code': 400, 'msg': '训练权重尚未上传，无法发布'}), 400
+
+        data = request.get_json(silent=True) or {}
+        name = (data.get('name') or '').strip() or _default_publish_name(task)
+        description = (data.get('description') or '').strip()
+        if not description:
+            description = f'从训练任务「{_task_display_name(task)}」发布'
+
+        explicit_version = (data.get('version') or '').strip()
+        auto_increment = data.get('auto_increment')
+        if auto_increment is None:
+            auto_increment = not explicit_version
+        if auto_increment or not explicit_version:
+            version = _resolve_next_publish_version(task, name)
+        else:
+            version = _normalize_model_version(explicit_version)
+
+        class_names = _extract_class_names_from_minio_model(model_url)
+        image_url = _upload_default_model_image()
+
+        published_model_id = _get_published_model_id(task.hyperparameters)
+        existing_model = None
+        if published_model_id:
+            existing_model = Model.query.get(published_model_id)
+
+        if existing_model:
+            conflict = Model.query.filter(
+                db.func.lower(Model.name) == db.func.lower(name),
+                Model.version == version,
+                Model.id != existing_model.id,
+            ).first()
+            if conflict:
+                return jsonify({
+                    'code': 400,
+                    'msg': f'模型"{name}"版本"{version}"已存在，请使用其他名称或版本号',
+                }), 400
+
+            existing_model.name = name
+            existing_model.description = description
+            existing_model.version = version
+            existing_model.model_path = model_url
+            existing_model.status = 0
+            existing_model.updated_at = datetime.utcnow()
+            if image_url and not existing_model.image_url:
+                existing_model.image_url = image_url
+            if class_names:
+                existing_model.class_names = dump_class_names_json(class_names)
+                existing_model.selected_class_names = dump_class_names_json(class_names)
+            model = existing_model
+            action_msg = '模型已更新发布'
+        else:
+            conflict = Model.query.filter(
+                db.func.lower(Model.name) == db.func.lower(name),
+                Model.version == version,
+            ).first()
+            if conflict:
+                return jsonify({
+                    'code': 400,
+                    'msg': f'模型"{name}"版本"{version}"已存在，请使用其他名称或版本号',
+                }), 400
+
+            model = Model(
+                name=name,
+                description=description,
+                model_path=model_url,
+                image_url=image_url,
+                version=version,
+                status=0,
+                class_names=dump_class_names_json(class_names) if class_names else None,
+                selected_class_names=dump_class_names_json(class_names) if class_names else None,
+            )
+            db.session.add(model)
+            action_msg = '模型发布成功'
+
+        db.session.flush()
+        _set_published_model_id(task, model.id, version)
+        db.session.commit()
+
+        return jsonify({
+            'code': 0,
+            'msg': action_msg,
+            'data': {
+                'model_id': model.id,
+                'name': model.name,
+                'version': model.version,
+                'model_path': model.model_path,
+                'published_model_id': model.id,
+            },
+        })
+    except IntegrityError as exc:
+        db.session.rollback()
+        logger.error('发布训练模型失败（名称冲突）: %s', exc)
+        return jsonify({'code': 400, 'msg': '模型名称或版本已存在，请修改后重试'}), 400
+    except Exception as exc:
+        db.session.rollback()
+        logger.error('发布训练模型失败: %s', exc, exc_info=True)
+        return jsonify({'code': 500, 'msg': f'发布失败: {exc}'}), 500
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
 @train_task_bp.route('/delete/<int:record_id>', methods=['DELETE'])

@@ -49,6 +49,7 @@
         @resume="handleResume"
         @retrain="handleRetrain"
         @delete="handleCardDelete"
+        @publish="handlePublishTrainModel"
       >
         <template #header>
           <Button type="primary" @click="openTrainDrawer(true, {})">
@@ -71,6 +72,10 @@
       @register="registerTrainLogsModal"
       @success="handleSuccess"
       @close="handleLogsModalClose"
+    />
+    <PublishTrainModelModal
+      @register="registerPublishModal"
+      @success="handlePublishSuccess"
     />
 
     <a-modal
@@ -106,8 +111,9 @@ import {getDatasetPage} from '@/api/device/dataset';
 import StartTrainModal from '@/views/train/components/StartTrainTaskModal/index.vue';
 import TrainLogsModal from '@/views/train/components/TrainTaskLogsModal/index.vue';
 import TrainTaskCardList from '@/views/train/components/TrainTaskCardList/index.vue';
+import PublishTrainModelModal from '@/views/train/components/PublishTrainModelModal/index.vue';
 import {getBasicColumns, getFormConfig} from './Data';
-import {canResumeTrainTask, canRetrainTrainTask, isTrainTaskActive} from './trainTaskUtils';
+import {canPublishTrainTask, canResumeTrainTask, canRetrainTrainTask, getPublishedModelId, isTrainTaskActive} from './trainTaskUtils';
 import {Empty as AEmpty, Modal as AModal} from 'ant-design-vue';
 import {Icon} from '@/components/Icon';
 import {resolveTrainResultsDisplayUrl} from '@/utils/alertMinioImage';
@@ -145,6 +151,7 @@ let resultsBlobUrl: string | null = null;
 
 const [registerAddModel, {openDrawer: openTrainDrawer}] = useDrawer();
 const [registerTrainLogsModal, {openModal: openTrainLogsModal}] = useModal();
+const [registerPublishModal, {openModal: openPublishModal}] = useModal();
 
 function getMethod(m: () => void) {
   cardListReload = m;
@@ -415,6 +422,19 @@ const getTableActions = (record: Record<string, unknown>) => {
     });
   }
 
+  if (canPublishTrainTask(record as { status?: string; minio_model_path?: string })) {
+    const publishedModelId = getPublishedModelId(record as { published_model_id?: number; hyperparameters?: unknown });
+    actions.push({
+      icon: 'ant-design:cloud-upload-outlined',
+      tooltip: {
+        title: publishedModelId ? `更新发布（模型 ID: ${publishedModelId}）` : '发布到模型管理',
+        placement: 'top',
+      },
+      onClick: () => handlePublishTrainModel(record),
+      style: 'color: #722ed1; padding: 0 8px; font-size: 16px;',
+    });
+  }
+
   actions.push({
     icon: 'mdi:delete-outline',
     tooltip: {title: '删除', placement: 'top'},
@@ -560,6 +580,14 @@ const handleDelete = async (record) => {
 
 const handleCardDelete = async (record) => {
   await handleDelete(record);
+};
+
+const handlePublishTrainModel = (record) => {
+  openPublishModal(true, {record});
+};
+
+const handlePublishSuccess = async () => {
+  await handleSuccess();
 };
 
 const handleOpenTrainLogsModal = (record) => {
