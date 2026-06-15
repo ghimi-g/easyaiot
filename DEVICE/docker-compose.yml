@@ -119,7 +119,7 @@ services:
       - ../.build-cache/device/logs:/root/logs/
       # - /data/skywalking/skywalking-agent:/data/skywalking/skywalking-agent
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:48083"]
+      test: ["CMD", "curl", "-f", "http://localhost:48083/actuator/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -156,7 +156,7 @@ services:
       - ../.build-cache/device/logs:/root/logs/
       # - /data/skywalking/skywalking-agent:/data/skywalking/skywalking-agent
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:48087"]
+      test: ["CMD", "curl", "-f", "http://localhost:48087/actuator/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -358,7 +358,7 @@ services:
     extra_hosts:
       - "kafka-server:host-gateway"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:48092"]
+      test: ["CMD", "curl", "-f", "http://localhost:48092/actuator/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -399,7 +399,7 @@ services:
       - "PostgresSQL:host-gateway"
       - "Redis:host-gateway"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:48088"]
+      test: ["CMD", "curl", "-f", "http://localhost:48088/actuator/health"]
       interval: 30s
       timeout: 10s
       retries: 5
