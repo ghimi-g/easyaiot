@@ -29,6 +29,82 @@ CONTROL_PLANE_URL = os.environ.get(
 ).rstrip('/')
 HEARTBEAT_INTERVAL = int(os.environ.get('HEARTBEAT_INTERVAL', '10'))
 AGENT_VERSION = '1.0.0'
+AGENT_ENV_FILE = os.environ.get('AGENT_ENV_FILE', '')
+
+
+def bootstrap_url() -> str:
+    base = CONTROL_PLANE_URL.rstrip('/')
+    if base.endswith('/agent'):
+        base = base[:-len('/agent')]
+    return f'{base}/platform-agent-bootstrap'
+
+
+def persist_credentials() -> None:
+    env_path = AGENT_ENV_FILE
+    if not env_path:
+        for candidate in (
+            '/opt/easyaiot/node-agent/agent.env',
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent.env'),
+        ):
+            if os.path.isfile(candidate):
+                env_path = candidate
+                break
+    if not env_path or not os.path.isfile(env_path):
+        return
+    try:
+        with open(env_path, encoding='utf-8') as f:
+            lines = f.readlines()
+        with open(env_path, 'w', encoding='utf-8') as f:
+            for line in lines:
+                if line.startswith('NODE_ID='):
+                    f.write(f'NODE_ID={NODE_ID}\n')
+                elif line.startswith('AGENT_TOKEN='):
+                    f.write(f'AGENT_TOKEN={AGENT_TOKEN}\n')
+                else:
+                    f.write(line)
+        logger.info('已同步凭据至 %s', env_path)
+    except OSError as e:
+        logger.debug('无法持久化 agent.env: %s', e)
+
+
+def try_refresh_credentials() -> bool:
+    global NODE_ID, AGENT_TOKEN
+    url = bootstrap_url()
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            logger.debug('bootstrap 请求失败 HTTP %s: %s', resp.status_code, url)
+            return False
+        data = resp.json()
+        if data.get('code') != 0:
+            logger.debug('bootstrap 返回错误: %s', data.get('msg', data))
+            return False
+        payload = data.get('data') or data
+        new_id = payload.get('nodeId')
+        new_token = payload.get('agentToken')
+        if not new_id or not new_token:
+            return False
+        new_id = int(new_id)
+        if NODE_ID and NODE_ID != new_id:
+            logger.debug('bootstrap nodeId=%s 与当前 NODE_ID=%s 不一致，跳过刷新', new_id, NODE_ID)
+            return False
+        if new_token == AGENT_TOKEN and new_id == NODE_ID:
+            return False
+        NODE_ID = new_id
+        AGENT_TOKEN = new_token
+        logger.info('已从 bootstrap 刷新凭据 nodeId=%s', NODE_ID)
+        persist_credentials()
+        return True
+    except Exception as e:
+        logger.debug('bootstrap 刷新失败: %s', e)
+    return False
+
+
+def is_token_auth_error(msg: str) -> bool:
+    if not msg:
+        return False
+    lowered = msg.lower()
+    return '令牌' in msg or 'token' in lowered and 'invalid' in lowered
 
 
 def get_gpu_info() -> List[Dict[str, Any]]:
@@ -88,7 +164,7 @@ def collect_metrics() -> Dict[str, Any]:
     }
 
 
-def post_json(path: str, payload: Dict[str, Any]) -> bool:
+def post_json(path: str, payload: Dict[str, Any], *, allow_refresh: bool = True) -> bool:
     url = f'{CONTROL_PLANE_URL}{path}'
     try:
         resp = requests.post(url, json=payload, timeout=10)
@@ -96,7 +172,11 @@ def post_json(path: str, payload: Dict[str, Any]) -> bool:
             data = resp.json()
             if data.get('code') == 0:
                 return True
-            logger.warning('请求失败 %s: %s', url, data.get('msg', data))
+            msg = data.get('msg', data)
+            if allow_refresh and is_token_auth_error(str(msg)) and try_refresh_credentials():
+                payload = {**payload, 'nodeId': NODE_ID, 'agentToken': AGENT_TOKEN}
+                return post_json(path, payload, allow_refresh=False)
+            logger.warning('请求失败 %s: %s', url, msg)
         else:
             logger.warning('HTTP %s: %s', resp.status_code, url)
     except Exception as e:

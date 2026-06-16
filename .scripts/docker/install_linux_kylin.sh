@@ -376,9 +376,9 @@ import sys
 import os
 
 config_file = "$docker_config_file"
-# 只使用 docker.1ms.run 镜像源
+# 只使用 DaoCloud 公共镜像源（https://github.com/DaoCloud/public-image-mirror）
 recommended_mirrors = [
-    "https://docker.1ms.run/"
+    "https://docker.m.daocloud.io/"
 ]
 
 # 读取现有配置
@@ -394,13 +394,13 @@ if os.path.exists(config_file):
 needs_update = False
 changes = []
 
-# 设置镜像源为只包含 docker.1ms.run
+# 设置镜像源为只包含 DaoCloud 公共镜像
 if "registry-mirrors" not in config:
     config["registry-mirrors"] = recommended_mirrors
     needs_update = True
     changes.append("添加 registry-mirrors 配置")
 else:
-    # 检查现有镜像源是否只包含 docker.1ms.run
+    # 检查现有镜像源是否只包含 DaoCloud 公共镜像
     existing_mirrors = config.get("registry-mirrors", [])
     if not isinstance(existing_mirrors, list):
         existing_mirrors = []
@@ -459,9 +459,9 @@ EOF
     fi
     
     if [ "$config_ok" = true ]; then
-        print_success "Docker 镜像源配置已完整（已使用 https://docker.1ms.run/）"
+        print_success "Docker 镜像源配置已完整（已使用 https://docker.m.daocloud.io/）"
     elif [ "$config_updated" = true ]; then
-        print_success "Docker 镜像源配置已更新为 https://docker.1ms.run/"
+        print_success "Docker 镜像源配置已更新为 https://docker.m.daocloud.io/"
         
         # 重启 Docker 服务使配置生效
         if systemctl is-active --quiet docker; then

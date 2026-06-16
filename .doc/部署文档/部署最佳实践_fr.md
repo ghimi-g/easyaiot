@@ -73,7 +73,7 @@ Cette commande exécute automatiquement le flux suivant :
 1. **Vérification de l'environnement** — Détecte si Docker / Docker Compose est installé
 2. **Détection IP** — Détecte automatiquement l'IP de l'hôte (pour l'injection de l'adresse média GB28181/ZLMediaKit)
 3. **Réservation des ports RTP** — Configure la réservation des ports 30000-30500 par le noyau Linux (évite l'occupation par les ports éphémères)
-4. **Configuration du miroir Docker** — Configure automatiquement `docker.1ms.run` pour accélérer les images
+4. **Configuration du miroir Docker** — Configure automatiquement `docker.m.daocloud.io` pour accélérer les images ([miroir public DaoCloud](https://github.com/DaoCloud/public-image-mirror))
 5. **Création du réseau Docker** — Crée le réseau unifié `easyaiot-network`
 6. **Déploiement des middlewares** — Démarre successivement Nacos, PostgreSQL, Redis, Kafka, MinIO, TDengine, Milvus, SRS, EMQX, ZLMediaKit, GPUStack, Dify, Node-RED
 7. **Attente de la disponibilité des services de base** — Attend automatiquement que les contrôles de santé PostgreSQL / Nacos / Redis réussissent

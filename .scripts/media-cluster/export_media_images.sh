@@ -69,12 +69,10 @@ main() {
   print_step "准备离线镜像包 -> ${IMAGES_DIR}"
 
   ensure_image "${SRS_IMAGE}" \
-    "docker.1ms.run/ossrs/srs:5" \
     "docker.m.daocloud.io/ossrs/srs:5" \
     "registry.cn-hangzhou.aliyuncs.com/ossrs/srs:5"
 
   ensure_image "${ZLM_IMAGE}" \
-    "docker.1ms.run/zlmediakit/zlmediakit:master" \
     "docker.m.daocloud.io/zlmediakit/zlmediakit:master"
 
   save_image "${SRS_IMAGE}" "${SRS_TAR}"

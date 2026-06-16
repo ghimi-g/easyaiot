@@ -73,7 +73,7 @@ sudo .scripts/docker/install_linux.sh install
 1. **환경 검사** — Docker / Docker Compose 설치 여부 확인
 2. **IP 감지** — 호스트 IP 자동 감지 (GB28181/ZLMediaKit 미디어 주소 주입용)
 3. **RTP 포트 예약** — Linux 커널 예약 포트 30000-30500 구성 (임시 포트 점유 방지)
-4. **Docker 미러 소스 구성** — `docker.1ms.run` 자동 구성으로 이미지 가속
+4. **Docker 미러 소스 구성** — `docker.m.daocloud.io` 자동 구성으로 이미지 가속 ([DaoCloud 공개 미러](https://github.com/DaoCloud/public-image-mirror))
 5. **Docker 네트워크 생성** — 통합 네트워크 `easyaiot-network` 생성
 6. **미들웨어 배포** — Nacos, PostgreSQL, Redis, Kafka, MinIO, TDengine, Milvus, SRS, EMQX, ZLMediaKit, GPUStack, Dify, Node-RED 순차 기동
 7. **기본 서비스 준비 대기** — PostgreSQL / Nacos / Redis 헬스 체크 통과 자동 대기

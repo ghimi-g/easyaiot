@@ -182,6 +182,9 @@ services:
       - SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE=
       - SPRING_DATASOURCE_DYNAMIC_DATASOURCE_MASTER_URL=jdbc:postgresql://PostgresSQL:5432/iot-node20?autoReconnect=true&autoReconnectForPools=true&useUnicode=true&characterEncoding=utf8&createDatabaseIfNotExist=true&allowMultiQueries=true&zeroDateTimeBehavior=convertToNull&stringtype=unspecified
       - SPRING_REDIS_HOST=Redis
+      # 容器内 iot-node 纳管控制面节点时使用宿主机 IP（避免探测到容器网桥地址）
+      - EASYAIOT_PLATFORM_HOST=${EASYAIOT_PLATFORM_HOST:-}
+      - EASYAIOT_AGENT_CONTROL_PLANE_URL=${EASYAIOT_AGENT_CONTROL_PLANE_URL:-}
     volumes:
       - ../.build-cache/device/node-logs:/root/logs/
     healthcheck:

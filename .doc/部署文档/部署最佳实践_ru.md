@@ -73,7 +73,7 @@ sudo .scripts/docker/install_linux.sh install
 1. **Проверка окружения** — проверка установки Docker / Docker Compose
 2. **Определение IP** — автоматическое определение IP хоста (для инъекции медиа-адресов GB28181/ZLMediaKit)
 3. **Резервирование RTP-портов** — настройка ядра Linux: зарезервированы порты 30000-30500 (чтобы не занимались временными портами)
-4. **Настройка зеркала Docker** — автоматическая настройка ускорения образов `docker.1ms.run`
+4. **Настройка зеркала Docker** — автоматическая настройка ускорения образов `docker.m.daocloud.io` ([публичное зеркало DaoCloud](https://github.com/DaoCloud/public-image-mirror))
 5. **Создание сети Docker** — единая сеть `easyaiot-network`
 6. **Развёртывание middleware** — последовательный запуск Nacos, PostgreSQL, Redis, Kafka, MinIO, TDengine, Milvus, SRS, EMQX, ZLMediaKit, GPUStack, Dify, Node-RED
 7. **Ожидание готовности базовых сервисов** — автоматическое ожидание прохождения health check PostgreSQL / Nacos / Redis

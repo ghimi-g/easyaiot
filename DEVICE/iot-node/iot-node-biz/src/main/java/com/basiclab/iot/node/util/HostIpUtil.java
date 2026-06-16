@@ -20,6 +20,11 @@ public final class HostIpUtil {
         if (cachedHostIp != null) {
             return cachedHostIp;
         }
+        String envHost = System.getenv("EASYAIOT_PLATFORM_HOST");
+        if (envHost != null && !envHost.isBlank() && isUsableIpv4(envHost.trim())) {
+            cachedHostIp = envHost.trim();
+            return cachedHostIp;
+        }
         String ip = detectViaUdp();
         if (ip == null) {
             ip = detectViaNetworkInterfaces();

@@ -21,7 +21,7 @@
 #   --skip-mirror   跳过配置 Docker 国内镜像源（daemon.json）
 #   --skip-pull     跳过拉取镜像（本地已有 postgres:18 时使用）
 #
-# 国内镜像：与 install_middleware_linux.sh 一致，使用 docker.1ms.run
+# 国内镜像：与 install_middleware_linux.sh 一致，使用 docker.m.daocloud.io
 # 拉取失败时会依次尝试国内镜像站直接拉取并 tag 为 postgres:18
 #
 # 默认连接信息（与 docker-compose.yml 一致）：
@@ -50,7 +50,7 @@ INIT_CONTAINER="postgres-init"
 NETWORK_NAME="easyaiot-network"
 PG_PORT=5432
 PG_IMAGE="postgres:18"
-DOCKER_MIRROR="https://docker.1ms.run/"
+DOCKER_MIRROR="https://docker.m.daocloud.io/"
 
 FORCE_OS_CHECK=false
 RUN_INIT=true
@@ -389,7 +389,7 @@ ensure_modern_docker() {
     upgrade_docker_ce_centos7 || exit 1
 }
 
-# 配置 Docker 国内镜像源（与 install_middleware_linux.sh 一致，使用 docker.1ms.run）
+# 配置 Docker 国内镜像源（与 install_middleware_linux.sh 一致，使用 docker.m.daocloud.io）
 # 注意：镜像源配置失败不应中断脚本，后续仍会尝试国内镜像站直连拉取
 configure_docker_mirror() {
     if [ "$SKIP_MIRROR" = true ]; then
@@ -407,14 +407,14 @@ configure_docker_mirror() {
     if [ "$EUID" -ne 0 ]; then
         print_warning "配置镜像源需要 root，当前非 root，跳过 daemon.json 写入"
         print_info "可改用 root 运行，或手动添加 registry-mirrors: ${DOCKER_MIRROR}"
-        print_info "后续将尝试从 docker.1ms.run 等国内地址直连拉取镜像"
+        print_info "后续将尝试从 docker.m.daocloud.io 等国内地址直连拉取镜像"
         return 0
     fi
 
     mkdir -p "$docker_config_dir"
 
     # 已包含国内镜像源
-    if [ -f "$docker_config_file" ] && grep -q 'docker\.1ms\.run' "$docker_config_file" 2>/dev/null; then
+    if [ -f "$docker_config_file" ] && grep -q 'docker\.m\.daocloud\.io' "$docker_config_file" 2>/dev/null; then
         print_success "Docker 镜像源已配置（${DOCKER_MIRROR}）"
         return 0
     fi
@@ -525,7 +525,7 @@ show_docker_registry_mirrors() {
         echo "$mirror_lines" | sed 's/^/  /'
     else
         print_warning "docker info 未显示 Registry Mirrors（CentOS7 旧版 Docker 可能不支持或需重启）"
-        print_info "本脚本将优先从 docker.1ms.run 直连拉取，不依赖 registry-mirror"
+        print_info "本脚本将优先从 docker.m.daocloud.io 直连拉取，不依赖 registry-mirror"
     fi
 }
 
@@ -572,9 +572,8 @@ ensure_postgresql_image() {
 
     # 国内直连优先（需 docker-ce 20+，1.13 会 missing signature key）
     local mirrors=(
-        "docker.1ms.run/library/postgres:18"
         "docker.m.daocloud.io/library/postgres:18"
-        "docker.1ms.run/postgres:18"
+        "docker.m.daocloud.io/postgres:18"
     )
 
     local pulled=false

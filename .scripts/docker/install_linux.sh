@@ -37,6 +37,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# shellcheck source=node/ensure_platform_agent_invoke.sh
+source "${PROJECT_ROOT}/.scripts/node/ensure_platform_agent_invoke.sh"
+
+_ensure_platform_agent_info() { print_info "$1"; }
+_ensure_platform_agent_ok() { print_success "$1"; }
+_ensure_platform_agent_warn() { print_warning "$1"; }
+
+ensure_platform_agent_after_stack() {
+    ENSURE_PLATFORM_AGENT_INFO=_ensure_platform_agent_info \
+    ENSURE_PLATFORM_AGENT_OK=_ensure_platform_agent_ok \
+    ENSURE_PLATFORM_AGENT_WARN=_ensure_platform_agent_warn \
+    ensure_platform_agent_if_needed || true
+}
+
 # 日志文件配置
 LOG_DIR="${SCRIPT_DIR}/logs"
 mkdir -p "$LOG_DIR"
@@ -380,7 +394,7 @@ check_docker_compose() {
 }
 
 # Docker 镜像源（唯一允许的源，规整后用于比较与写入）
-DOCKER_MIRROR="https://docker.1ms.run/"
+DOCKER_MIRROR="https://docker.m.daocloud.io/"
 
 # 配置变更后按需重启 Docker（仅服务在运行时）
 restart_docker_if_active() {
@@ -570,6 +584,14 @@ execute_module_command() {
     fix_line_endings "$install_file"
     print_info "执行 $module_name: $command"
 
+    local defer_agent_sync=0
+    case "$module" in
+        DEVICE|AI|VIDEO|WEB) defer_agent_sync=1 ;;
+    esac
+    if [ "$defer_agent_sync" -eq 1 ]; then
+        export EASYAIOT_DEFER_PLATFORM_AGENT_SYNC=1
+    fi
+
     # ⚠️ 失败判定必须取 PIPESTATUS[0]（子脚本退出码）：
     # 脚本未开 pipefail（全局开会让 `docker ps | grep -q` 类管道误报），
     # `if 子脚本 | tee` 取到的是 tee 的退出码（恒 0），曾导致所有模块失败都被报成"成功"。
@@ -578,6 +600,10 @@ execute_module_command() {
     local rc
     bash "$install_file" "$command" 2>&1 | tee -a "$LOG_FILE"
     rc=${PIPESTATUS[0]}
+
+    if [ "$defer_agent_sync" -eq 1 ]; then
+        unset EASYAIOT_DEFER_PLATFORM_AGENT_SYNC
+    fi
 
     if [ "$rc" -eq 0 ]; then
         print_success "$module_name: $command 执行成功"
@@ -682,6 +708,7 @@ install_linux() {
     
     if [ $success_count -eq $total_count ]; then
         print_success "所有模块安装成功！"
+        ensure_platform_agent_after_stack
     else
         print_warning "部分模块安装失败，请检查日志"
         exit 1
@@ -803,6 +830,7 @@ start_all() {
     fi
     
     print_success "所有服务启动完成"
+    ensure_platform_agent_after_stack
 }
 
 # 停止所有服务
@@ -843,6 +871,7 @@ restart_all() {
     done
 
     print_success "所有服务重启完成"
+    ensure_platform_agent_after_stack
 }
 
 # 查看所有服务状态
@@ -970,6 +999,7 @@ update_all() {
     fi
 
     print_success "所有服务更新完成"
+    ensure_platform_agent_after_stack
 }
 
 # 验证所有服务

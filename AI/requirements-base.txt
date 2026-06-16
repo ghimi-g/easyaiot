@@ -24,3 +24,5 @@ psutil>=7.1.0
 paddlepaddle==3.2.0
 paddleocr==3.2.0
 pydub==0.25.1
+# SAM 3.1 自动标注：从魔塔 ModelScope 下载 facebook/sam3.1
+modelscope>=1.20.0

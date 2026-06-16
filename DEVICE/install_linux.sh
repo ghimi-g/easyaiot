@@ -112,6 +112,24 @@ show_unhealthy_containers() {
     done
 }
 
+# 容器部署后同步宿主机控制面 Agent 凭据（数据库重建后 agent.env 令牌可能过期）
+# shellcheck source=../.scripts/node/ensure_platform_agent_invoke.sh
+source "${EASYAIOT_ROOT}/.scripts/node/ensure_platform_agent_invoke.sh"
+
+_ensure_platform_agent_info() { print_info "$1"; }
+_ensure_platform_agent_ok() { print_success "$1"; }
+_ensure_platform_agent_warn() { print_warning "$1"; }
+
+ensure_platform_agent_after_device_stack() {
+    if [[ "${EASYAIOT_DEFER_PLATFORM_AGENT_SYNC:-}" == "1" ]]; then
+        return 0
+    fi
+    ENSURE_PLATFORM_AGENT_INFO=_ensure_platform_agent_info \
+    ENSURE_PLATFORM_AGENT_OK=_ensure_platform_agent_ok \
+    ENSURE_PLATFORM_AGENT_WARN=_ensure_platform_agent_warn \
+    ensure_platform_agent_if_needed || true
+}
+
 # 检查docker-compose.yml是否存在
 check_compose_file() {
     if [ ! -f "$COMPOSE_FILE" ]; then
@@ -358,19 +376,66 @@ ensure_maven_settings() {
 EOF
 }
 
-# 从宿主机各模块 target/ 收集运行时 Jar 到 JARS_DIR（复刻原 Dockerfile.base 容器内提取逻辑）。
+# Docker userns-remap 会把容器内 --user 0:0 在 bind mount 上写成 nobody(65534)，
+# 宿主机非特权用户随后 cp -f 覆盖会「权限不够」且 set -e 无声退出。
+_normalize_build_ownership() {
+    local uid gid probe="${JARS_DIR}/.ownership_probe"
+    uid="$(id -u)"
+    gid="$(id -g)"
+    mkdir -p "$JARS_DIR"
+    if touch "$probe" 2>/dev/null; then
+        rm -f "$probe"
+        return 0
+    fi
+    print_warning "Maven 产物目录不可写（常见原因：Docker userns-remap 写成 nobody 属主），正在修复..."
+    chown -R "${uid}:${gid}" "$SCRIPT_DIR"/*/target "$JARS_DIR" 2>/dev/null || true
+    if touch "$probe" 2>/dev/null; then
+        rm -f "$probe"
+        return 0
+    fi
+    docker run --rm --user 0:0 -v "${SCRIPT_DIR}:/build" alpine sh -c \
+        "find /build -type d -name target -exec chown -R ${uid}:${gid} {} + 2>/dev/null; true" \
+        >/dev/null 2>&1 || true
+    if touch "$probe" 2>/dev/null; then
+        rm -f "$probe"
+        return 0
+    fi
+    print_error "无法修复构建产物属主，请手动执行: sudo chown -R ${uid}:${gid} ${JARS_DIR}"
+    return 1
+}
+
 # 必须强制覆盖（cp -f，绝不能用 cp -u）：可复现构建把 Jar 文件 mtime 钉死为
 # outputTimestamp(2026-01-01)，而目标副本 mtime 为复制时刻（较新）；cp -u 会判定"源更旧"
 # 而永久跳过，导致重编的新 Jar 进不来、运行时镜像一直用旧 Jar（陈旧 → 容器行为不更新）。
+_copy_runtime_jar() {
+    local src="$1" dest="$2"
+    if cp -f "$src" "$dest" 2>/dev/null; then
+        return 0
+    fi
+    # 兜底：特权容器内复制（bind mount 上宿主机 cp 仍失败时）
+    if docker run --rm --user 0:0 \
+        -v "$(dirname "$src"):/src:ro" \
+        -v "$JARS_DIR:/dest" \
+        alpine cp -f "/src/$(basename "$src")" "/dest/$(basename "$dest")" >/dev/null 2>&1; then
+        return 0
+    fi
+    print_error "复制 Jar 失败: $src -> $dest"
+    return 1
+}
+
+# 从宿主机各模块 target/ 收集运行时 Jar 到 JARS_DIR（复刻原 Dockerfile.base 容器内提取逻辑）。
 collect_runtime_jars() {
-    mkdir -p "$JARS_DIR"
-    [ -f "$SCRIPT_DIR/iot-gateway/target/iot-gateway.jar" ] && \
-        cp -f "$SCRIPT_DIR/iot-gateway/target/iot-gateway.jar" "$JARS_DIR/iot-gateway.jar"
-    local biz jar
+    _normalize_build_ownership || return 1
+    if [ -f "$SCRIPT_DIR/iot-gateway/target/iot-gateway.jar" ]; then
+        _copy_runtime_jar "$SCRIPT_DIR/iot-gateway/target/iot-gateway.jar" "$JARS_DIR/iot-gateway.jar" || return 1
+    fi
+    local biz jar dest
     while IFS= read -r biz; do
         jar=$(find "$biz/target" -maxdepth 1 -name "*-biz.jar" \
             ! -name "*-sources.jar" ! -name "*-javadoc.jar" ! -name "*.original" -type f 2>/dev/null | head -1)
-        [ -n "$jar" ] && [ -f "$jar" ] && cp -f "$jar" "$JARS_DIR/$(basename "$jar")"
+        [ -z "$jar" ] || [ ! -f "$jar" ] && continue
+        dest="$JARS_DIR/$(basename "$jar")"
+        _copy_runtime_jar "$jar" "$dest" || return 1
     done < <(find "$SCRIPT_DIR"/iot-* -type d -name "*-biz" 2>/dev/null)
 }
 
@@ -572,7 +637,10 @@ build_base_jars() {
     fi
 
     print_info "从宿主机各模块 target/ 收集 Jar 到 $JARS_DIR ..."
-    collect_runtime_jars
+    if ! collect_runtime_jars; then
+        print_error "收集运行时 Jar 失败（多为 target/jars 属主异常，见上方提示）"
+        exit 1
+    fi
 
     local jar_count=0
     while IFS= read -r jar_file; do
@@ -785,6 +853,7 @@ build_and_start() {
     print_success "========== 服务构建并启动完成 =========="
     print_success "服务构建并启动完成（共 $container_count 个容器，总耗时 $((SECONDS - _t_all))s）"
     echo
+    ensure_platform_agent_after_device_stack
     print_info "Jar 包: $JARS_DIR"
     print_info "Maven 缓存: $MAVEN_CACHE_DIR"
     print_info "可以使用以下命令查看服务状态:"
@@ -798,6 +867,7 @@ start_services() {
     cd "$SCRIPT_DIR"
     compose_up_detached --quiet-pull 2>&1 | grep -E "(Creating|Starting|Started|Healthy|ERROR|WARNING|Recreate)" || true
     print_success "服务启动完成"
+    ensure_platform_agent_after_device_stack
 }
 
 # 停止所有服务
@@ -814,6 +884,7 @@ restart_services() {
     cd "$SCRIPT_DIR"
     $DOCKER_COMPOSE restart
     print_success "服务重启完成"
+    ensure_platform_agent_after_device_stack
 }
 
 # 查看服务状态
@@ -1026,6 +1097,7 @@ update_services() {
     fi
     
     print_success "========== 服务更新完成（共 $container_count 个容器，总耗时 $((SECONDS - _t_all))s）=========="
+    ensure_platform_agent_after_device_stack
 }
 
 # 显示帮助信息

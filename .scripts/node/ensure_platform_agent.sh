@@ -5,9 +5,9 @@
 #   bash .scripts/node/ensure_platform_agent.sh
 #
 # 凭据来源（按优先级）:
-#   1. 工作目录下已有 agent.env（含 NODE_ID / AGENT_TOKEN）
-#   2. 环境变量 NODE_ID / AGENT_TOKEN
-#   3. Gateway bootstrap 接口（需 iot-node 已运行，可选）
+#   1. 环境变量 NODE_ID / AGENT_TOKEN（显式指定）
+#   2. Gateway bootstrap 接口（需 iot-node 已运行，容器重建后自动同步新令牌）
+#   3. 工作目录下已有 agent.env（bootstrap 不可用时回退）
 #
 # 环境变量:
 #   EASYAIOT_GATEWAY_URL          Gateway 地址，默认 http://127.0.0.1:48080
@@ -16,7 +16,9 @@
 #   EASYAIOT_AGENT_SOURCE_PATH        源码目录，默认 <repo>/NODE
 #   EASYAIOT_AGENT_PORT               监听端口，默认 9100
 #   EASYAIOT_AGENT_LOCAL_PYTHON       Python 命令，默认 python3
-#   AGENT_FETCH_BOOTSTRAP=1           强制从 API 拉取凭据并覆盖 agent.env
+#   AGENT_USE_CACHED_ENV=1          跳过 bootstrap，仅使用本地 agent.env（离线环境）
+#   AGENT_BOOTSTRAP_WAIT_SECONDS=180  install 场景等待 bootstrap 就绪的最长秒数
+#   AGENT_BOOTSTRAP_RETRY_INTERVAL=3  轮询间隔（秒）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -25,6 +27,8 @@ INSTALL_DIR="${EASYAIOT_AGENT_LOCAL_INSTALL_DIR:-/opt/easyaiot/node-agent}"
 SOURCE_DIR="${EASYAIOT_AGENT_SOURCE_PATH:-$ROOT/NODE}"
 AGENT_PORT="${EASYAIOT_AGENT_PORT:-9100}"
 PYTHON="${EASYAIOT_AGENT_LOCAL_PYTHON:-python3}"
+AGENT_BOOTSTRAP_WAIT_SECONDS="${AGENT_BOOTSTRAP_WAIT_SECONDS:-180}"
+AGENT_BOOTSTRAP_RETRY_INTERVAL="${AGENT_BOOTSTRAP_RETRY_INTERVAL:-3}"
 
 is_port_listening() {
   local port="$1"
@@ -107,23 +111,60 @@ MINIO_SECRET_KEY=your-secret
 EOF
 }
 
-resolve_credentials() {
-  local work_dir="$1"
-  local creds=""
+fetch_platform_node_credentials_with_wait() {
+  if [[ -n "${NODE_ID:-}" && -n "${AGENT_TOKEN:-}" ]]; then
+    return 1
+  fi
+  if [[ "${AGENT_USE_CACHED_ENV:-}" == "1" ]]; then
+    return 1
+  fi
 
-  if [[ "${AGENT_FETCH_BOOTSTRAP:-}" != "1" ]]; then
-    creds="$(read_env_credentials "${work_dir}/agent.env" 2>/dev/null || true)"
+  local deadline=$((SECONDS + AGENT_BOOTSTRAP_WAIT_SECONDS))
+  local creds=""
+  echo "[platform-agent] 等待 bootstrap 就绪（最长 ${AGENT_BOOTSTRAP_WAIT_SECONDS}s）..." >&2
+  while [[ $SECONDS -lt $deadline ]]; do
+    creds="$(fetch_platform_node_credentials)"
     if [[ -n "$creds" ]]; then
       echo "$creds"
       return 0
     fi
-    if [[ -n "${NODE_ID:-}" && -n "${AGENT_TOKEN:-}" ]]; then
-      echo "${NODE_ID}|${AGENT_TOKEN}|${AGENT_LISTEN_PORT:-$AGENT_PORT}"
+    sleep "$AGENT_BOOTSTRAP_RETRY_INTERVAL"
+  done
+  echo "[platform-agent] bootstrap 超时，将尝试使用本地 agent.env" >&2
+  return 1
+}
+
+resolve_credentials() {
+  local work_dir="$1"
+  local creds=""
+
+  if [[ -n "${NODE_ID:-}" && -n "${AGENT_TOKEN:-}" ]]; then
+    echo "${NODE_ID}|${AGENT_TOKEN}|${AGENT_LISTEN_PORT:-$AGENT_PORT}"
+    return 0
+  fi
+
+  if [[ "${AGENT_USE_CACHED_ENV:-}" != "1" ]]; then
+    creds="$(fetch_platform_node_credentials_with_wait || true)"
+    if [[ -z "$creds" ]]; then
+      creds="$(fetch_platform_node_credentials)"
+    fi
+    if [[ -n "$creds" ]]; then
+      local cached=""
+      cached="$(read_env_credentials "${work_dir}/agent.env" 2>/dev/null || true)"
+      if [[ -n "$cached" && "$cached" != "$creds" ]]; then
+        local cached_id cached_token boot_id boot_token
+        IFS='|' read -r cached_id cached_token _ <<<"$cached"
+        IFS='|' read -r boot_id boot_token _ <<<"$creds"
+        if [[ "$cached_id" != "$boot_id" || "$cached_token" != "$boot_token" ]]; then
+          echo "[platform-agent] 本地 agent.env 与平台不一致，已从 bootstrap 同步 (nodeId=${boot_id})" >&2
+        fi
+      fi
+      echo "$creds"
       return 0
     fi
   fi
 
-  creds="$(fetch_platform_node_credentials)"
+  creds="$(read_env_credentials "${work_dir}/agent.env" 2>/dev/null || true)"
   if [[ -n "$creds" ]]; then
     echo "$creds"
     return 0
@@ -131,30 +172,28 @@ resolve_credentials() {
   return 1
 }
 
-main() {
-  if is_port_listening "$AGENT_PORT"; then
-    echo "[platform-agent] 端口 ${AGENT_PORT} 已有 Agent 监听，跳过"
-    exit 0
+stop_running_agent() {
+  if [[ -f /etc/systemd/system/easyaiot-node-agent.service ]]; then
+    if systemctl is-active easyaiot-node-agent >/dev/null 2>&1; then
+      sudo systemctl stop easyaiot-node-agent 2>/dev/null || true
+    fi
+    return 0
   fi
+  if command -v fuser >/dev/null 2>&1; then
+    sudo fuser -k "${AGENT_PORT}/tcp" >/dev/null 2>&1 || true
+  elif command -v lsof >/dev/null 2>&1; then
+    local pids
+    pids="$(lsof -ti tcp:"${AGENT_PORT}" 2>/dev/null || true)"
+    if [[ -n "$pids" ]]; then
+      kill $pids 2>/dev/null || true
+      sleep 1
+    fi
+  fi
+}
 
-  local work_dir
-  work_dir="$(resolve_work_dir)" || {
-    echo "[platform-agent] 未找到 Agent 目录（${INSTALL_DIR} 或 ${SOURCE_DIR}）" >&2
-    echo "[platform-agent] 请先执行 NODE/install.sh 或指定 EASYAIOT_AGENT_SOURCE_PATH" >&2
-    exit 1
-  }
-
-  local creds node_id agent_token port
-  creds="$(resolve_credentials "$work_dir")" || {
-    echo "[platform-agent] 缺少 NODE_ID / AGENT_TOKEN" >&2
-    echo "[platform-agent] 请编辑 ${work_dir}/agent.env，或设置 AGENT_FETCH_BOOTSTRAP=1 且确保 Gateway 可访问" >&2
-    exit 1
-  }
-  IFS='|' read -r node_id agent_token port <<<"$creds"
-
-  write_agent_env "$work_dir" "$node_id" "$agent_token" "${port:-$AGENT_PORT}"
-  echo "[platform-agent] 已写入 ${work_dir}/agent.env (nodeId=${node_id})"
-
+restart_agent_service() {
+  local work_dir="$1"
+  stop_running_agent
   if [[ -f /etc/systemd/system/easyaiot-node-agent.service ]]; then
     if [[ -x "${INSTALL_DIR}/install.sh" ]]; then
       sudo bash "${INSTALL_DIR}/install.sh" restart
@@ -163,8 +202,8 @@ main() {
       sudo systemctl enable easyaiot-node-agent >/dev/null 2>&1 || true
       sudo systemctl restart easyaiot-node-agent
     fi
-    echo "[platform-agent] 已通过 systemd 启动 easyaiot-node-agent"
-    exit 0
+    echo "[platform-agent] 已通过 systemd 重启 easyaiot-node-agent"
+    return 0
   fi
 
   mkdir -p "${HOME}/logs"
@@ -178,6 +217,49 @@ main() {
     nohup "$PYTHON" "${work_dir}/run_agent.py" >>"${HOME}/logs/platform-node-agent.log" 2>&1 &
   fi
   echo "[platform-agent] 已后台启动 Agent，日志: ${HOME}/logs/platform-node-agent.log"
+}
+
+main() {
+  local work_dir
+  work_dir="$(resolve_work_dir)" || {
+    echo "[platform-agent] 未找到 Agent 目录（${INSTALL_DIR} 或 ${SOURCE_DIR}）" >&2
+    echo "[platform-agent] 请先执行 NODE/install.sh 或指定 EASYAIOT_AGENT_SOURCE_PATH" >&2
+    exit 1
+  }
+
+  local creds node_id agent_token port
+  creds="$(resolve_credentials "$work_dir")" || {
+    echo "[platform-agent] 缺少 NODE_ID / AGENT_TOKEN" >&2
+    echo "[platform-agent] 请编辑 ${work_dir}/agent.env，或确保 Gateway 可访问 bootstrap 接口" >&2
+    exit 1
+  }
+  IFS='|' read -r node_id agent_token port <<<"$creds"
+
+  local cached="" creds_changed=0
+  cached="$(read_env_credentials "${work_dir}/agent.env" 2>/dev/null || true)"
+  if [[ -n "$cached" ]]; then
+    local cached_id cached_token
+    IFS='|' read -r cached_id cached_token _ <<<"$cached"
+    if [[ "$cached_id" != "$node_id" || "$cached_token" != "$agent_token" ]]; then
+      creds_changed=1
+    fi
+  else
+    creds_changed=1
+  fi
+
+  if is_port_listening "$AGENT_PORT" && [[ "$creds_changed" -eq 0 ]]; then
+    echo "[platform-agent] 端口 ${AGENT_PORT} 已有 Agent 监听且凭据一致，跳过"
+    exit 0
+  fi
+
+  if is_port_listening "$AGENT_PORT" && [[ "$creds_changed" -eq 1 ]]; then
+    echo "[platform-agent] 检测到凭据变更，重启 Agent (nodeId=${node_id})"
+  fi
+
+  write_agent_env "$work_dir" "$node_id" "$agent_token" "${port:-$AGENT_PORT}"
+  echo "[platform-agent] 已写入 ${work_dir}/agent.env (nodeId=${node_id})"
+
+  restart_agent_service "$work_dir"
 }
 
 main "$@"

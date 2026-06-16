@@ -73,7 +73,7 @@ This command automatically performs the following steps:
 1. **Environment check** — Verifies Docker and Docker Compose are installed
 2. **IP detection** — Automatically detects host IP (used for GB28181/ZLMediaKit media address injection)
 3. **RTP port reservation** — Configures Linux kernel reserved ports 30000-30500 (prevents ephemeral port allocation conflicts)
-4. **Docker mirror configuration** — Automatically configures `docker.1ms.run` for image acceleration
+4. **Docker mirror configuration** — Automatically configures `docker.m.daocloud.io` for image acceleration ([DaoCloud public image mirror](https://github.com/DaoCloud/public-image-mirror))
 5. **Create Docker network** — Creates unified network `easyaiot-network`
 6. **Deploy middleware** — Starts Nacos, PostgreSQL, Redis, Kafka, MinIO, TDengine, Milvus, SRS, EMQX, ZLMediaKit, GPUStack, Dify, and Node-RED in sequence
 7. **Wait for base services** — Automatically waits for PostgreSQL / Nacos / Redis health checks to pass

@@ -4,3 +4,5 @@
 
 git+https://github.com/facebookresearch/segment-anything.git
 pycocotools>=2.0.7
+# SAM 3.1 权重从魔塔 ModelScope 下载（facebook/sam3.1）
+modelscope>=1.20.0

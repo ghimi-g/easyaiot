@@ -212,7 +212,7 @@ ensure_mc_image() {
     fi
     print_info "拉取 mc 客户端镜像 ${MC_IMAGE} ..."
     set +e
-    for img in "docker.1ms.run/minio/mc:latest" "docker.m.daocloud.io/minio/mc:latest" "$MC_IMAGE"; do
+    for img in "docker.m.daocloud.io/minio/mc:latest" "$MC_IMAGE"; do
         if DOCKER_CONTENT_TRUST=0 docker pull "$img"; then
             [ "$img" != "$MC_IMAGE" ] && docker tag "$img" "$MC_IMAGE" 2>/dev/null || true
             set -e

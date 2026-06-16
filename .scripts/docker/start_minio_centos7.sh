@@ -50,7 +50,7 @@ MINIO_API_PORT=9000
 MINIO_CONSOLE_PORT=9001
 MINIO_ROOT_USER="minioadmin"
 MINIO_ROOT_PASSWORD="basiclab@iot975248395"
-DOCKER_MIRROR="https://docker.1ms.run/"
+DOCKER_MIRROR="https://docker.m.daocloud.io/"
 
 # 与 docker-compose.yml 保持一致，启动时从 compose 解析
 MINIO_IMAGE="minio/minio:RELEASE.2025-04-22T22-12-26Z"
@@ -311,7 +311,7 @@ configure_docker_mirror() {
 
     mkdir -p /etc/docker
 
-    if [ -f "$docker_config_file" ] && grep -q 'docker\.1ms\.run' "$docker_config_file" 2>/dev/null; then
+    if [ -f "$docker_config_file" ] && grep -q 'docker\.m\.daocloud\.io' "$docker_config_file" 2>/dev/null; then
         print_success "Docker 镜像源已配置（${DOCKER_MIRROR}）"
         return 0
     fi
@@ -418,9 +418,7 @@ ensure_minio_image() {
 
     export DOCKER_CONTENT_TRUST=0
     local mirrors=(
-        "docker.1ms.run/${MINIO_IMAGE}"
         "docker.m.daocloud.io/${MINIO_IMAGE}"
-        "docker.1ms.run/minio/minio:latest"
         "docker.m.daocloud.io/minio/minio:latest"
     )
 
@@ -445,7 +443,7 @@ ensure_minio_image() {
     fi
 
     print_error "无法拉取 MinIO 镜像"
-    print_info "可尝试: docker pull docker.1ms.run/minio/minio:latest && docker tag docker.1ms.run/minio/minio:latest ${MINIO_IMAGE}"
+    print_info "可尝试: docker pull docker.m.daocloud.io/minio/minio:latest && docker tag docker.m.daocloud.io/minio/minio:latest ${MINIO_IMAGE}"
     exit 1
 }
 

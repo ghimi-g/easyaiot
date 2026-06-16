@@ -712,9 +712,9 @@ import os
 
 config_file = "$docker_config_file"
 has_gpu = $has_gpu
-# 推荐的镜像源列表（只保留 docker.1ms.run）
+# 推荐的镜像源列表（DaoCloud 公共镜像：https://github.com/DaoCloud/public-image-mirror）
 recommended_mirrors = [
-    "https://docker.1ms.run/"
+    "https://docker.m.daocloud.io/"
 ]
 nvidia_runtime = {
     "path": "nvidia-container-runtime",

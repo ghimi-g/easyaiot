@@ -30,6 +30,20 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# shellcheck source=node/ensure_platform_agent_invoke.sh
+source "${PROJECT_ROOT}/.scripts/node/ensure_platform_agent_invoke.sh"
+
+_ensure_platform_agent_info() { print_info "$1"; }
+_ensure_platform_agent_ok() { print_success "$1"; }
+_ensure_platform_agent_warn() { print_warning "$1"; }
+
+ensure_platform_agent_after_business_stack() {
+    ENSURE_PLATFORM_AGENT_INFO=_ensure_platform_agent_info \
+    ENSURE_PLATFORM_AGENT_OK=_ensure_platform_agent_ok \
+    ENSURE_PLATFORM_AGENT_WARN=_ensure_platform_agent_warn \
+    ensure_platform_agent_if_needed || true
+}
+
 # 业务模块（按依赖顺序：网关/微服务 -> AI/视频 -> 前端）
 ALL_MODULES=(DEVICE AI VIDEO WEB)
 
@@ -359,6 +373,7 @@ execute_module() {
     (
         cd "$module_dir"
         export EASYAIOT_AUTO_YES="${EASYAIOT_AUTO_YES:-0}"
+        export EASYAIOT_DEFER_PLATFORM_AGENT_SYNC=1
         bash install_linux.sh "$mapped" "$@"
     ) 2>&1 | tee -a "$LOG_FILE"
 
@@ -415,6 +430,12 @@ run_on_modules() {
         print_error "失败模块: ${failed[*]}"
         return 1
     fi
+
+    case "$cmd" in
+        install|start|restart|update)
+            ensure_platform_agent_after_business_stack
+            ;;
+    esac
     return 0
 }
 

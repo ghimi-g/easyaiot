@@ -66,6 +66,9 @@ export interface SamModelStatus {
   downloaded_bytes?: number;
   total_bytes?: number;
   error?: string | null;
+  /** modelscope | http */
+  source?: string;
+  modelscope_id?: string | null;
 }
 
 const commonApi = (

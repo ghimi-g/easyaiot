@@ -123,7 +123,7 @@ export function useSamModelSetup(onReady?: () => void) {
       if (res?.data) {
         modelStatus.value = {
           exists: !!res.data.exists,
-          filename: res.data.filename || 'model.pt',
+          filename: res.data.filename || 'sam3.1_multiplex.pt',
           path: res.data.path,
           size_bytes: res.data.size_bytes ?? 0,
           downloading: !!res.data.downloading,

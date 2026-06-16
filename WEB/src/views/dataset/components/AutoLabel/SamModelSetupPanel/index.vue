@@ -22,7 +22,7 @@
           <h1 class="setup-headline">配置 SAM 万物识别引擎</h1>
           <p class="setup-lead">
             使用 SAM 冷启动、开放词汇自动标注前，需在本机部署
-            <strong>model.pt</strong>（SAM3 权重）。下载一次，持久可用。
+            <strong>sam3.1_multiplex.pt</strong>（SAM 3.1 权重）。下载一次，持久可用。
           </p>
 
           <div class="setup-metrics">
@@ -47,8 +47,8 @@
                 <Icon icon="ant-design:experiment-outlined" :size="22" />
               </div>
               <div class="panel-model-meta">
-                <div class="panel-model-name">{{ modelStatus?.filename || 'model.pt' }}</div>
-                <div class="panel-model-sub">Ultralytics SAM3 · 文本/框选开放词汇分割</div>
+                <div class="panel-model-name">{{ modelStatus?.filename || 'sam3.1_multiplex.pt' }}</div>
+                <div class="panel-model-sub">Meta SAM 3.1 · 魔塔 ModelScope · 文本/框选开放词汇分割</div>
               </div>
               <Tag v-if="!showProgress && modelStatus?.resumable" color="warning">可续传</Tag>
               <Tag v-else-if="!showProgress && modelStatus?.stage !== 'error'" color="blue">待安装</Tag>
@@ -110,7 +110,7 @@
               <div class="panel-error-icon">
                 <CloseCircleFilled />
               </div>
-              <p class="panel-error-msg">{{ modelStatus.error || '下载失败，请检查网络或 SAM_MODEL_DOWNLOAD_URL 配置后重试' }}</p>
+              <p class="panel-error-msg">{{ modelStatus.error || '下载失败，请检查网络或 ModelScope 连接后重试' }}</p>
               <p v-if="modelStatus?.resumable && showPartialProgress" class="panel-resume-hint">
                 已下载 {{ formatSize(modelStatus?.downloaded_bytes) }}，点击「继续下载」将从断点续传
               </p>
@@ -136,7 +136,7 @@
                 <CloudDownloadOutlined class="panel-idle-icon" />
               </div>
               <p class="panel-idle-text">
-                模型约 <strong>3.5 GB</strong>，首次下载预计 <strong>5–30 分钟</strong>，将直接写入 AI 服务本地目录。
+                模型约 <strong>3.3 GB</strong>，首次下载预计 <strong>5–30 分钟</strong>，将从魔塔 ModelScope 拉取并写入 AI 服务本地目录。
               </p>
               <p v-if="modelStatus?.path" class="panel-path">目标路径：{{ modelStatus.path }}</p>
             </div>
@@ -192,8 +192,8 @@ const props = defineProps<{
 defineEmits<{ download: [] }>();
 
 const metricItems = [
-  { value: '~3.5 GB', label: '模型体积' },
-  { value: 'SAM3', label: '推理引擎' },
+  { value: '~3.3 GB', label: '模型体积' },
+  { value: 'SAM 3.1', label: '推理引擎' },
   { value: '零样本', label: '冷启动标注' },
 ];
 
@@ -204,8 +204,8 @@ const featureItems = [
 ];
 
 const steps = [
-  { key: 'download', title: '下载模型权重', desc: '从 SAM_MODEL_DOWNLOAD_URL 拉取' },
-  { key: 'install', title: '写入本地路径', desc: 'AI/models/sam3/model.pt' },
+  { key: 'download', title: '下载模型权重', desc: '从魔塔 ModelScope 拉取 facebook/sam3.1' },
+  { key: 'install', title: '写入本地路径', desc: 'AI/models/sam3/sam3.1_multiplex.pt' },
   { key: 'ready', title: '引擎就绪', desc: '可启动 SAM 冷启动标注' },
 ];
 
@@ -224,7 +224,7 @@ const stageText = computed(() => {
   if (props.finished) return '安装完成，可开始 SAM 标注';
   const stage = props.modelStatus?.stage;
   if (stage === 'installing') return '正在写入模型文件';
-  if (stage === 'downloading') return '正在下载 SAM3 模型权重';
+  if (stage === 'downloading') return '正在从魔塔下载 SAM 3.1 权重';
   return '正在准备安装';
 });
 

@@ -73,7 +73,7 @@ sudo .scripts/docker/install_linux.sh install
 1. **環境檢查** — 偵測 Docker / Docker Compose 是否已安裝
 2. **IP 偵測** — 自動偵測宿主機 IP（用於 GB28181/ZLMediaKit 媒體位址注入）
 3. **RTP 連接埠預留** — 設定 Linux 核心保留連接埠 30000-30500（避免被臨時連接埠佔用）
-4. **Docker 映像來源設定** — 自動設定 `docker.1ms.run` 加速映像
+4. **Docker 映像來源設定** — 自動設定 `docker.m.daocloud.io` 加速映像（[DaoCloud 公共鏡像](https://github.com/DaoCloud/public-image-mirror)）
 5. **建立 Docker 網路** — 建立統一網路 `easyaiot-network`
 6. **部署中介軟體** — 依序啟動 Nacos、PostgreSQL、Redis、Kafka、MinIO、TDengine、Milvus、SRS、EMQX、ZLMediaKit、GPUStack、Dify、Node-RED
 7. **等待基礎服務就緒** — 自動等待 PostgreSQL / Nacos / Redis 健康檢查通過

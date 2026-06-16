@@ -15,7 +15,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 _AI_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_DEFAULT_SAM_MODEL_PATH = os.path.join(_AI_ROOT, 'models', 'sam3', 'model.pt')
+_DEFAULT_SAM_MODEL_PATH = os.path.join(_AI_ROOT, 'models', 'sam3', 'sam3.1_multiplex.pt')
 
 SAM_ENABLED = os.getenv('SAM_ENABLED', 'false').lower() in ('1', 'true', 'yes')
 SAM_ENGINE = os.getenv('SAM_ENGINE', 'sam3')
