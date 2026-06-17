@@ -1504,12 +1504,19 @@ def execute_auto_label_task(app, task_id):
             return_masks = bool(task.return_masks)
 
             def _iter_with_prefetch(items):
+                def _download_in_app_context(image):
+                    with app.app_context():
+                        return _download_dataset_image(image)
+
                 if prefetch_workers <= 1 or len(items) <= 1:
                     for item in items:
                         yield _download_dataset_image(item)
                     return
                 with ThreadPoolExecutor(max_workers=prefetch_workers) as pool:
-                    futures = {pool.submit(_download_dataset_image, img): idx for idx, img in enumerate(items)}
+                    futures = {
+                        pool.submit(_download_in_app_context, img): idx
+                        for idx, img in enumerate(items)
+                    }
                     results = [None] * len(items)
                     for future in as_completed(futures):
                         results[futures[future]] = future.result()
