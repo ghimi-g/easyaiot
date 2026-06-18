@@ -19,7 +19,6 @@
           />
         </TabPane>
         <TabPane key="3" tab="设备列表">
-          <GpuStackMonitorTip class="page-monitor-tip" />
           <DeviceCreate
             v-if="deviceCreateVisible"
             :initial-kind="deviceCreateInitial.kind"
@@ -223,7 +222,6 @@ import {
   supportsRtspForward,
 } from './utils/devicePlay';
 import Gb28181Node from "@/views/gb28181/components/Node/index.vue";
-import GpuStackMonitorTip from '@/components/GpuStackMonitorTip/index.vue';
 import BatchLocationImportModal from './components/BatchLocationImportModal/index.vue';
 import DeviceLocationDrawer from './components/DeviceLocationDrawer/index.vue';
 import {

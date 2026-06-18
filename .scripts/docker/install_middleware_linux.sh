@@ -34,42 +34,18 @@ cd "$SCRIPT_DIR"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 
 
-# GPUStack Worker（本机算力节点，与 compose 中的 gpustack-server 配合）
-GPUSTACK_WORKER_NAME="${GPUSTACK_WORKER_NAME:-gpustack-worker}"
-GPUSTACK_WORKER_IMAGE="${GPUSTACK_WORKER_IMAGE:-quay.io/gpustack/gpustack:v2.1.2}"
-GPUSTACK_CLUSTER_NAME="${GPUSTACK_CLUSTER_NAME:-easyaiot}"
-GPUSTACK_ADMIN_USER="${GPUSTACK_ADMIN_USER:-admin}"
-GPUSTACK_ADMIN_PASSWORD="${GPUSTACK_ADMIN_PASSWORD:-${GPUSTACK_BOOTSTRAP_PASSWORD:-basiclab@iotp4JWmQSvzdh0z4mF}}"
-# GPUSTACK_TOKEN 由 API 动态获取；若已导出则优先使用环境变量中的值
-GPUSTACK_API_COOKIE_FILE="${SCRIPT_DIR}/logs/.gpustack_api_cookie"
-# 跳过 GPUStack（Server 容器、Worker、镜像拉取、数据目录递归 chmod）。
-# 导出 SKIP_GPUSTACK=true 可避免 gpustack_data 大目录的递归 777 卡顿、加速部署。
-SKIP_GPUSTACK="${SKIP_GPUSTACK:-false}"
-
-# Dify 1.14.2（LLM 应用平台，独立 compose 部署）
-DIFY_VERSION="${DIFY_VERSION:-1.14.2}"
-DIFY_DIR="${SCRIPT_DIR}/dify_data"
-DIFY_COMPOSE_FILE="${DIFY_DIR}/docker-compose.yaml"
-DIFY_OVERRIDE_FILE="${DIFY_DIR}/docker-compose.override.yml"
-DIFY_PROJECT_NAME="${DIFY_PROJECT_NAME:-dify}"
-DIFY_HTTP_PORT="${DIFY_HTTP_PORT:-10190}"
-# 跳过 Dify（独立 compose 部署、镜像拉取、dify_data 目录递归权限）。
-# 导出 SKIP_DIFY=true 可避免 dify_data/volumes 大目录的递归 777 卡顿、加速部署。
-SKIP_DIFY="${SKIP_DIFY:-false}"
 
 # 强制对所有已存在的存储目录做完整递归 chmod/chown（兜底用）。
 # 默认 false：已存在目录只设顶层权限，避免对海量数据文件递归导致卡顿（容器自身写的数据权限本就正确）。
 # 仅当怀疑既有数据目录权限损坏、容器读写报错时，导出 FORCE_CHMOD=true 跑一次强制修复。
 FORCE_CHMOD="${FORCE_CHMOD:-false}"
 
-# 日志文件配置（主日志 / GPUStack / Dify 各自独立，互不混写）
+# 日志文件配置
 LOG_DIR="${SCRIPT_DIR}/logs"
 _LOG_TS="$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOG_DIR"
 chmod -R 777 "$LOG_DIR" 2>/dev/null || sudo chmod -R 777 "$LOG_DIR" 2>/dev/null || true
 LOG_FILE="${LOG_DIR}/install_middleware_${_LOG_TS}.log"
-GPUSTACK_LOG_FILE="${LOG_DIR}/gpustack_${_LOG_TS}.log"
-DIFY_LOG_FILE="${LOG_DIR}/dify_${_LOG_TS}.log"
 
 # 初始化日志文件
 echo "=========================================" >> "$LOG_FILE"
@@ -79,19 +55,6 @@ echo "命令: $*" >> "$LOG_FILE"
 echo "=========================================" >> "$LOG_FILE"
 echo "" >> "$LOG_FILE"
 
-echo "=========================================" >> "$GPUSTACK_LOG_FILE"
-echo "GPUStack 部署日志" >> "$GPUSTACK_LOG_FILE"
-echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$GPUSTACK_LOG_FILE"
-echo "命令: $*" >> "$GPUSTACK_LOG_FILE"
-echo "=========================================" >> "$GPUSTACK_LOG_FILE"
-echo "" >> "$GPUSTACK_LOG_FILE"
-
-echo "=========================================" >> "$DIFY_LOG_FILE"
-echo "Dify 部署日志" >> "$DIFY_LOG_FILE"
-echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$DIFY_LOG_FILE"
-echo "命令: $*" >> "$DIFY_LOG_FILE"
-echo "=========================================" >> "$DIFY_LOG_FILE"
-echo "" >> "$DIFY_LOG_FILE"
 
 # 中间件服务列表
 MIDDLEWARE_SERVICES=(
@@ -107,8 +70,6 @@ MIDDLEWARE_SERVICES=(
     "VSCode"
     "EMQX"
     "ZLMediaKit"
-    "GPUStack"
-    "Dify"
 )
 
 # 中间件端口映射
@@ -125,8 +86,6 @@ MIDDLEWARE_PORTS["NodeRED"]="1880"
 MIDDLEWARE_PORTS["VSCode"]="10192"
 MIDDLEWARE_PORTS["EMQX"]="1883"
 MIDDLEWARE_PORTS["ZLMediaKit"]="6080"
-MIDDLEWARE_PORTS["GPUStack"]="10180"
-MIDDLEWARE_PORTS["Dify"]="${DIFY_HTTP_PORT}"
 
 # 中间件健康检查端点
 declare -A MIDDLEWARE_HEALTH_ENDPOINTS
@@ -142,31 +101,7 @@ MIDDLEWARE_HEALTH_ENDPOINTS["NodeRED"]="/"
 MIDDLEWARE_HEALTH_ENDPOINTS["VSCode"]="/"
 MIDDLEWARE_HEALTH_ENDPOINTS["EMQX"]="/api/v5/status"
 MIDDLEWARE_HEALTH_ENDPOINTS["ZLMediaKit"]="/index/api/getServerConfig"
-MIDDLEWARE_HEALTH_ENDPOINTS["GPUStack"]="/"
-MIDDLEWARE_HEALTH_ENDPOINTS["Dify"]="/"
 
-# 跳过 GPUStack / Dify 时，从中间件列表中移除，避免后续的容器检测/健康检查/端口清理
-if [ "$SKIP_GPUSTACK" = "true" ] || [ "$SKIP_DIFY" = "true" ]; then
-    _filtered_services=()
-    for _svc in "${MIDDLEWARE_SERVICES[@]}"; do
-        [ "$SKIP_GPUSTACK" = "true" ] && [ "$_svc" = "GPUStack" ] && continue
-        [ "$SKIP_DIFY" = "true" ] && [ "$_svc" = "Dify" ] && continue
-        _filtered_services+=("$_svc")
-    done
-    MIDDLEWARE_SERVICES=("${_filtered_services[@]}")
-    unset _filtered_services _svc
-fi
-
-# 计算 compose up/pull 需要操作的服务列表。
-# 未跳过 GPUStack 时返回空（表示操作全部服务）；跳过时返回除 GPUStack 外的所有 compose 服务名。
-# 结果进程内缓存：`compose config` 要解析整个 compose 文件（约 1~2s），一次运行内不会变化
-compose_service_args() {
-    [ "$SKIP_GPUSTACK" != "true" ] && return 0
-    if [ -z "${_COMPOSE_SVC_ARGS:-}" ]; then
-        _COMPOSE_SVC_ARGS=$($COMPOSE_CMD -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -vx "GPUStack" | tr '\n' ' ')
-    fi
-    printf '%s' "$_COMPOSE_SVC_ARGS"
-}
 
 # 以特权执行命令：root 直接执行；非 root 且有 sudo 走 sudo；两者皆无则原样尝试。
 # 统一全文反复出现的 EUID/sudo 三分支样板（语义与原三分支完全一致）。
@@ -228,101 +163,6 @@ print_section() {
     log_to_file ""
 }
 
-# GPUStack 独立日志（仅写入 GPUSTACK_LOG_FILE，不写入主日志）
-_gpustack_log_to_file() {
-    local message="$1"
-    local timestamp
-    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    local clean_message
-    clean_message=$(echo "$message" | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g")
-    echo "[$timestamp] $clean_message" >> "$GPUSTACK_LOG_FILE"
-}
-
-print_gpustack_info() {
-    local message="${BLUE}[GPUStack][INFO]${NC} $1"
-    echo -e "$message"
-    _gpustack_log_to_file "[INFO] $1"
-}
-
-print_gpustack_success() {
-    local message="${GREEN}[GPUStack][SUCCESS]${NC} $1"
-    echo -e "$message"
-    _gpustack_log_to_file "[SUCCESS] $1"
-}
-
-print_gpustack_warning() {
-    local message="${YELLOW}[GPUStack][WARNING]${NC} $1"
-    echo -e "$message"
-    _gpustack_log_to_file "[WARNING] $1"
-}
-
-print_gpustack_error() {
-    local message="${RED}[GPUStack][ERROR]${NC} $1"
-    echo -e "$message"
-    _gpustack_log_to_file "[ERROR] $1"
-}
-
-print_gpustack_section() {
-    local section="$1"
-    echo ""
-    echo -e "${YELLOW}========================================${NC}"
-    echo -e "${YELLOW}  [GPUStack] $section${NC}"
-    echo -e "${YELLOW}========================================${NC}"
-    echo ""
-    _gpustack_log_to_file ""
-    _gpustack_log_to_file "========================================="
-    _gpustack_log_to_file "  $section"
-    _gpustack_log_to_file "========================================="
-    _gpustack_log_to_file ""
-}
-
-# Dify 独立日志（仅写入 DIFY_LOG_FILE，不写入主日志）
-_dify_log_to_file() {
-    local message="$1"
-    local timestamp
-    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    local clean_message
-    clean_message=$(echo "$message" | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g")
-    echo "[$timestamp] $clean_message" >> "$DIFY_LOG_FILE"
-}
-
-print_dify_info() {
-    local message="${BLUE}[Dify][INFO]${NC} $1"
-    echo -e "$message"
-    _dify_log_to_file "[INFO] $1"
-}
-
-print_dify_success() {
-    local message="${GREEN}[Dify][SUCCESS]${NC} $1"
-    echo -e "$message"
-    _dify_log_to_file "[SUCCESS] $1"
-}
-
-print_dify_warning() {
-    local message="${YELLOW}[Dify][WARNING]${NC} $1"
-    echo -e "$message"
-    _dify_log_to_file "[WARNING] $1"
-}
-
-print_dify_error() {
-    local message="${RED}[Dify][ERROR]${NC} $1"
-    echo -e "$message"
-    _dify_log_to_file "[ERROR] $1"
-}
-
-print_dify_section() {
-    local section="$1"
-    echo ""
-    echo -e "${YELLOW}========================================${NC}"
-    echo -e "${YELLOW}  [Dify] $section${NC}"
-    echo -e "${YELLOW}========================================${NC}"
-    echo ""
-    _dify_log_to_file ""
-    _dify_log_to_file "========================================="
-    _dify_log_to_file "  $section"
-    _dify_log_to_file "========================================="
-    _dify_log_to_file ""
-}
 
 # 检查命令是否存在
 check_command() {
@@ -2079,90 +1919,6 @@ check_filesystem_mount_status() {
     return 0  # 可写
 }
 
-# GPUStack 容器内 SSL 私钥权限检测修复（先检测再修改）。
-# 内嵌 postgres 开启 ssl，要求 /etc/ssl/private/ssl-cert-snakeoil.key 为
-# 0600(属主为数据库用户) 或 0640(属主 root)；该文件在容器可写层（非宿主机挂载），
-# 层被污染（如容器内调试时 chmod 过）后 docker restart 不会复原，需 exec 修复。
-# 彻底复原方式是重建容器（rw 层重置、gpustack_data 数据不受影响）：
-#   $COMPOSE_CMD -f docker-compose.yml up -d --force-recreate GPUStack
-fix_gpustack_ssl_key_permissions() {
-    local key="/etc/ssl/private/ssl-cert-snakeoil.key"
-
-    docker ps --format '{{.Names}}' | grep -q '^gpustack-server$' || return 0
-
-    local mode
-    mode=$(docker exec gpustack-server stat -c '%a' "$key" 2>/dev/null || echo "")
-    [ -z "$mode" ] && return 0   # 文件不存在或容器暂不可 exec：交给重建容器处理
-    case "$mode" in
-        600|640) return 0 ;;     # 已合规，零操作
-    esac
-
-    print_warning "GPUStack 容器内 SSL 私钥权限为 $mode（要求 600/640），正在修复..."
-    # 还原为 Debian 镜像默认：root:ssl-cert 0640（postgres 经 ssl-cert 组读取）
-    docker exec gpustack-server chown root:ssl-cert "$key" 2>/dev/null || true
-    docker exec gpustack-server chmod 640 "$key" 2>/dev/null || true
-    print_success "GPUStack SSL 私钥权限已修复（仍异常时可重建容器: up -d --force-recreate GPUStack）"
-}
-
-# GPUStack 内嵌 PostgreSQL 要求 PGDATA 为 0700/0750，777 会导致 postgres 拒绝启动。
-# 注意：此操作又快又是正确性关键，即使 SKIP_GPUSTACK=true 也必须执行（仅在目录存在时生效），
-# 否则残留的 777 权限会让 gpustack-server 的内嵌 PG 一直拒绝启动。
-fix_gpustack_postgresql_permissions() {
-    # SSL 私钥与 PGDATA 同为内嵌 PG 的启动阻断项，且互相独立（PGDATA 正常时私钥也可能被污染），
-    # 借同一调用链一并检测（检测式，正常时零开销）
-    fix_gpustack_ssl_key_permissions
-
-    local gpustack_pg_root="${SCRIPT_DIR}/gpustack_data/postgresql"
-    local gpustack_pg_data="${gpustack_pg_root}/data"
-
-    if [ ! -d "$gpustack_pg_data" ]; then
-        return 0
-    fi
-
-    # 先检测再修改：PGDATA 已是 0700/0750（postgres 接受的两种模式）则零操作、零日志，
-    # 仅在权限确实不对（如被旧版脚本递归 777 过）时才 chmod 修复
-    local data_mode
-    data_mode=$(stat -c '%a' "$gpustack_pg_data" 2>/dev/null || echo "")
-    if [ "$data_mode" = "700" ] || [ "$data_mode" = "750" ]; then
-        return 0
-    fi
-
-    print_warning "GPUStack 内嵌 PostgreSQL 数据目录权限为 ${data_mode:-未知}（要求 0700/0750），正在修复为 0750..."
-
-    run_priv chmod 750 "$gpustack_pg_root" "$gpustack_pg_data" 2>/dev/null || true
-
-    print_success "GPUStack PostgreSQL 数据目录权限已修复为 0750"
-}
-
-# GPUStack 数据目录：除内嵌 PostgreSQL 外其余子目录用 777
-# 参数1（可选）：目录在本次运行前是否已存在（true/false，默认 false=新建）
-# 与全局「已存在目录仅顶层 chmod」策略一致：已存在且未开 FORCE_CHMOD 时，
-# 跳过对模型缓存等大目录的递归 777（每次 update 全量递归正是卡顿来源）；
-# 内嵌 PG 权限始终走 fix_gpustack_postgresql_permissions 的"先检测再修复"。
-set_gpustack_data_permissions() {
-    local pre_existing="${1:-false}"
-    # SKIP_GPUSTACK=true 时只跳过慢的 777 递归，仍必须修正内嵌 PG 权限（否则 gpustack-server 起不来）
-    if [ "$SKIP_GPUSTACK" = "true" ]; then
-        fix_gpustack_postgresql_permissions
-        return 0
-    fi
-    local gpustack_dir="${SCRIPT_DIR}/gpustack_data"
-
-    mkdir -p "$gpustack_dir"
-
-    local recurse="true"
-    if [ "$pre_existing" = "true" ] && [ "$FORCE_CHMOD" != "true" ]; then
-        recurse="false"
-    fi
-
-    run_priv chmod 777 "$gpustack_dir" 2>/dev/null || true
-    if [ "$recurse" = "true" ]; then
-        run_priv find "$gpustack_dir" -mindepth 1 -maxdepth 1 ! -name postgresql -exec chmod -R 777 {} + 2>/dev/null || true
-    fi
-
-    fix_gpustack_postgresql_permissions
-}
-
 # 创建所有中间件的存储目录
 create_all_storage_directories() {
     print_info "创建所有中间件存储目录..."
@@ -2225,11 +1981,7 @@ create_all_storage_directories() {
         "${SCRIPT_DIR}/../zlmediakit/www:::"         # ZLMediaKit Web 目录（使用默认权限）
         "${SCRIPT_DIR}/../zlmediakit/log:::"         # ZLMediaKit 日志（使用默认权限）
         "${SCRIPT_DIR}/../zlmediakit/conf:::"        # ZLMediaKit 配置（使用默认权限）
-        "${SCRIPT_DIR}/gpustack_data:::"             # GPUStack 数据（配置、内嵌库等）
     )
-    # Dify 卷目录（SKIP_DIFY=true 时跳过创建与递归 chmod，避免大目录卡顿）
-    [ "$SKIP_DIFY" != "true" ] && storage_dirs+=("${DIFY_DIR}/volumes:::")  # Dify 应用/数据库/向量库等
-
     local created_count=0
     local total_count=${#storage_dirs[@]}
     local failed_dirs=()
@@ -2272,12 +2024,8 @@ create_all_storage_directories() {
                 run_priv chown $R "${uid}:${gid}" "$dir_path" 2>/dev/null || true
                 run_priv chmod $R 777 "$dir_path" 2>/dev/null || true
             else
-                # 即使没有指定 UID/GID，也设置777权限（GPUStack 内嵌 PG 除外）
-                if [ "$dir_path" = "${SCRIPT_DIR}/gpustack_data" ]; then
-                    set_gpustack_data_permissions "$pre_existing"
-                else
-                    run_priv chmod $R 777 "$dir_path" 2>/dev/null || true
-                fi
+                # 即使没有指定 UID/GID，也设置777权限
+                run_priv chmod $R 777 "$dir_path" 2>/dev/null || true
             fi
             created_count=$((created_count + 1))
         else
@@ -2316,10 +2064,6 @@ create_all_storage_directories() {
         "${SCRIPT_DIR}/../zlmediakit"
         "${SCRIPT_DIR}/logs"
     )
-    # 注：gpustack_data 不在此列——它已在上面的存储目录循环中由
-    # set_gpustack_data_permissions 处理过，重复处理会再次递归扫描大模型缓存目录。
-    # Dify 父目录（SKIP_DIFY=true 时跳过递归 chmod）
-    [ "$SKIP_DIFY" != "true" ] && parent_dirs+=("${DIFY_DIR}")
     # 默认只设父目录顶层权限；FORCE_CHMOD=true 时递归兜底修复
     local PR=""
     [ "$FORCE_CHMOD" = "true" ] && PR="-R"
@@ -2702,619 +2446,6 @@ wait_for_zlmediakit() {
     
     print_error "ZLMediaKit 服务未就绪"
     return 1
-}
-
-# 配置 GPUStack 对外访问地址（供 Worker 节点注册）
-prepare_gpustack_env() {
-    [ "$SKIP_GPUSTACK" = "true" ] && return 0
-    local host_ip
-    host_ip=$(get_host_ip)
-    if [ -z "$host_ip" ]; then
-        print_gpustack_warning "无法获取宿主机 IP，GPUStack Worker 注册将使用 host.docker.internal:10180"
-        export GPUSTACK_SERVER_EXTERNAL_URL="http://host.docker.internal:10180"
-    else
-        export GPUSTACK_SERVER_EXTERNAL_URL="http://${host_ip}:10180"
-        print_gpustack_info "GPUStack 对外地址: $GPUSTACK_SERVER_EXTERNAL_URL"
-    fi
-}
-
-# 执行 docker 命令（优先当前用户，必要时使用 sudo）
-docker_cli() {
-    if docker "$@" 2>/dev/null; then
-        return 0
-    fi
-    if command -v sudo &>/dev/null; then
-        sudo docker "$@"
-        return $?
-    fi
-    docker "$@"
-}
-
-# GPUStack API 基础地址（脚本在宿主机执行，连本机 Server）
-_gpustack_api_base() {
-    echo "http://127.0.0.1:10180"
-}
-
-# 登录 GPUStack 管理 API（Session Cookie）
-gpustack_api_login() {
-    local api_base http_code
-    api_base=$(_gpustack_api_base)
-    rm -f "$GPUSTACK_API_COOKIE_FILE"
-
-    http_code=$(curl -sS -o /dev/null -w '%{http_code}' \
-        -X POST "${api_base}/auth/login" \
-        -H 'Content-Type: application/x-www-form-urlencoded' \
-        -c "$GPUSTACK_API_COOKIE_FILE" \
-        --data-urlencode "username=${GPUSTACK_ADMIN_USER}" \
-        --data-urlencode "password=${GPUSTACK_ADMIN_PASSWORD}" 2>/dev/null || echo "000")
-
-    if [ "$http_code" = "200" ] || [ "$http_code" = "204" ]; then
-        return 0
-    fi
-    return 1
-}
-
-# 按名称查询集群 ID
-gpustack_api_get_cluster_id_by_name() {
-    local cluster_name="$1"
-    local api_base resp
-    api_base=$(_gpustack_api_base)
-
-    if [ ! -f "$GPUSTACK_API_COOKIE_FILE" ]; then
-        return 1
-    fi
-
-    resp=$(curl -sS -G "${api_base}/v2/clusters" \
-        --data-urlencode "name=${cluster_name}" \
-        -b "$GPUSTACK_API_COOKIE_FILE" 2>/dev/null) || return 1
-
-    CLUSTER_NAME="$cluster_name" RESP="$resp" python3 - <<'PY'
-import json, os, sys
-name = os.environ.get("CLUSTER_NAME", "")
-try:
-    data = json.loads(os.environ.get("RESP", "{}"))
-except json.JSONDecodeError:
-    sys.exit(1)
-for item in data.get("items", []):
-    if item.get("name") == name:
-        print(item["id"])
-        sys.exit(0)
-sys.exit(1)
-PY
-}
-
-# 创建 Docker 类型集群
-gpustack_api_create_cluster() {
-    local cluster_name="$1"
-    local server_url="$2"
-    local api_base resp http_code cluster_id
-    api_base=$(_gpustack_api_base)
-
-    if [ ! -f "$GPUSTACK_API_COOKIE_FILE" ]; then
-        return 1
-    fi
-
-    resp=$(curl -sS -w $'\n%{http_code}' \
-        -X POST "${api_base}/v2/clusters" \
-        -H 'Content-Type: application/json' \
-        -b "$GPUSTACK_API_COOKIE_FILE" \
-        -d "$(CLUSTER_NAME="$cluster_name" SERVER_URL="$server_url" python3 - <<'PY'
-import json, os
-print(json.dumps({
-    "name": os.environ["CLUSTER_NAME"],
-    "provider": "Docker",
-    "server_url": os.environ.get("SERVER_URL") or None,
-}))
-PY
-)" 2>/dev/null) || return 1
-
-    http_code="${resp##*$'\n'}"
-    resp="${resp%$'\n'*}"
-
-    if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
-        echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])" 2>/dev/null
-        return 0
-    fi
-
-    if [ "$http_code" = "409" ]; then
-        gpustack_api_get_cluster_id_by_name "$cluster_name"
-        return $?
-    fi
-
-    return 1
-}
-
-# 获取集群 Worker 注册令牌
-gpustack_api_get_registration_token() {
-    local cluster_id="$1"
-    local api_base resp
-    api_base=$(_gpustack_api_base)
-
-    if [ ! -f "$GPUSTACK_API_COOKIE_FILE" ] || [ -z "$cluster_id" ]; then
-        return 1
-    fi
-
-    resp=$(curl -sS "${api_base}/v2/clusters/${cluster_id}/registration-token" \
-        -b "$GPUSTACK_API_COOKIE_FILE" 2>/dev/null) || return 1
-
-    echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))" 2>/dev/null
-}
-
-# 自动创建 easyaiot 集群并获取注册令牌
-ensure_gpustack_cluster_and_token() {
-    local host_ip server_url cluster_id token
-
-    if [ -n "${GPUSTACK_TOKEN:-}" ]; then
-        print_gpustack_info "使用环境变量 GPUSTACK_TOKEN（跳过 API 获取）"
-        return 0
-    fi
-
-    if ! command -v curl &>/dev/null || ! command -v python3 &>/dev/null; then
-        print_gpustack_error "需要 curl 与 python3 才能配置 GPUStack 集群"
-        return 1
-    fi
-
-    if ! gpustack_api_login; then
-        print_gpustack_error "GPUStack 登录失败，请检查 GPUSTACK_ADMIN_USER / GPUSTACK_ADMIN_PASSWORD"
-        print_gpustack_info "默认密码与 docker-compose 中 GPUSTACK_BOOTSTRAP_PASSWORD 一致（仅首次初始化有效）"
-        return 1
-    fi
-
-    host_ip=$(get_host_ip)
-    if [ -z "$host_ip" ]; then
-        host_ip="127.0.0.1"
-    fi
-    server_url="http://${host_ip}:10180"
-
-    cluster_id=$(gpustack_api_get_cluster_id_by_name "$GPUSTACK_CLUSTER_NAME" 2>/dev/null) || cluster_id=""
-    if [ -z "$cluster_id" ]; then
-        print_gpustack_info "集群「${GPUSTACK_CLUSTER_NAME}」不存在，正在自动创建..."
-        cluster_id=$(gpustack_api_create_cluster "$GPUSTACK_CLUSTER_NAME" "$server_url" 2>/dev/null) || cluster_id=""
-        if [ -z "$cluster_id" ]; then
-            print_gpustack_error "自动创建 GPUStack 集群失败"
-            return 2
-        fi
-        print_gpustack_success "已创建 GPUStack 集群: ${GPUSTACK_CLUSTER_NAME} (id=${cluster_id})"
-    else
-        print_gpustack_info "GPUStack 集群已存在: ${GPUSTACK_CLUSTER_NAME} (id=${cluster_id})"
-    fi
-
-    token=$(gpustack_api_get_registration_token "$cluster_id" 2>/dev/null) || token=""
-    if [ -z "$token" ]; then
-        print_gpustack_error "获取集群注册令牌失败"
-        return 3
-    fi
-
-    GPUSTACK_TOKEN="$token"
-    export GPUSTACK_TOKEN
-    print_gpustack_success "已获取集群「${GPUSTACK_CLUSTER_NAME}」注册令牌"
-    return 0
-}
-
-# 提示用户手动创建集群后重试
-prompt_manual_gpustack_cluster_setup() {
-    local host_ip console_url
-    host_ip=$(get_host_ip)
-    console_url="http://${host_ip:-localhost}:10180"
-
-    print_gpustack_section "需要手动创建 GPUStack 集群"
-    print_gpustack_warning "无法自动创建或获取集群「${GPUSTACK_CLUSTER_NAME}」的注册令牌"
-    echo ""
-    print_gpustack_info "请打开 GPUStack 控制台: ${console_url}"
-    print_gpustack_info "  用户: ${GPUSTACK_ADMIN_USER}"
-    print_gpustack_info "  密码: 安装时 GPUSTACK_BOOTSTRAP_PASSWORD（若已修改请使用当前 admin 密码）"
-    print_gpustack_info "在「集群管理」中创建 Docker 类型集群，名称必须为: ${GREEN}${GPUSTACK_CLUSTER_NAME}${NC}"
-    echo ""
-    echo -ne "${YELLOW}[GPUStack][提示]${NC} 创建完成后按 Enter 重试，输入 q 跳过 GPUStack Worker 部署: "
-    read -r response
-    case "$(echo "$response" | tr '[:upper:]' '[:lower:]')" in
-        q|quit|skip|n|no)
-            return 1
-            ;;
-    esac
-    return 0
-}
-
-# 准备 Worker 注册令牌（自动创建集群或引导手动创建）
-prepare_gpustack_worker_token() {
-    local cluster_id token
-
-    if ensure_gpustack_cluster_and_token; then
-        return 0
-    fi
-
-    while true; do
-        if ! prompt_manual_gpustack_cluster_setup; then
-            print_gpustack_warning "已跳过 GPUStack Worker 部署"
-            return 1
-        fi
-
-        if ! gpustack_api_login; then
-            print_gpustack_warning "GPUStack 登录失败，请检查账号密码后重试"
-            continue
-        fi
-
-        cluster_id=$(gpustack_api_get_cluster_id_by_name "$GPUSTACK_CLUSTER_NAME" 2>/dev/null) || cluster_id=""
-        if [ -z "$cluster_id" ]; then
-            print_gpustack_warning "仍未找到集群「${GPUSTACK_CLUSTER_NAME}」，请确认名称正确"
-            continue
-        fi
-
-        token=$(gpustack_api_get_registration_token "$cluster_id" 2>/dev/null) || token=""
-        if [ -n "$token" ]; then
-            GPUSTACK_TOKEN="$token"
-            export GPUSTACK_TOKEN
-            print_gpustack_success "已获取集群「${GPUSTACK_CLUSTER_NAME}」注册令牌"
-            return 0
-        fi
-
-        print_gpustack_warning "找到集群但获取注册令牌失败，请检查控制台后重试"
-    done
-}
-
-# 等待 GPUStack Server 就绪
-wait_for_gpustack_server() {
-    [ "$SKIP_GPUSTACK" = "true" ] && return 0
-    local max_attempts=60
-    local attempt=0
-    local check_url="http://127.0.0.1:10180/"
-
-    print_gpustack_info "等待 GPUStack Server 就绪..."
-    while [ "$attempt" -lt "$max_attempts" ]; do
-        if curl -sf "$check_url" >/dev/null 2>&1; then
-            print_gpustack_success "GPUStack Server 已就绪"
-            return 0
-        fi
-        attempt=$((attempt + 1))
-        sleep 2
-    done
-
-    print_gpustack_warning "GPUStack Server 未在预期时间内就绪，仍将尝试部署 Worker"
-    return 1
-}
-
-# 部署 GPUStack Worker（检测 GPU 后选择是否启用 NVIDIA runtime）
-deploy_gpustack_worker() {
-    if [ "$SKIP_GPUSTACK" = "true" ]; then
-        print_gpustack_info "已设置 SKIP_GPUSTACK=true，跳过 GPUStack Worker 部署"
-        return 0
-    fi
-    print_gpustack_section "部署 GPUStack Worker"
-
-    if ! docker_cli ps &>/dev/null; then
-        print_gpustack_error "无法访问 Docker，跳过 GPUStack Worker 部署"
-        return 1
-    fi
-
-    if ! prepare_gpustack_worker_token; then
-        return 1
-    fi
-
-    local host_ip
-    host_ip=$(get_host_ip)
-    if [ -z "$host_ip" ]; then
-        print_gpustack_warning "无法获取宿主机 IP，Worker 将使用 127.0.0.1"
-        host_ip="127.0.0.1"
-    else
-        print_gpustack_info "检测到宿主机 IP: $host_ip"
-    fi
-
-    local server_url="http://${host_ip}:10180"
-    local worker_ip="$host_ip"
-
-    if docker_cli image inspect "$GPUSTACK_WORKER_IMAGE" &>/dev/null; then
-        print_gpustack_info "GPUStack Worker 镜像已存在: $GPUSTACK_WORKER_IMAGE"
-    else
-        print_gpustack_info "拉取 GPUStack Worker 镜像: $GPUSTACK_WORKER_IMAGE"
-        if ! docker_cli pull "$GPUSTACK_WORKER_IMAGE" 2>&1 | tee -a "$GPUSTACK_LOG_FILE"; then
-            print_gpustack_error "拉取 GPUStack Worker 镜像失败"
-            return 1
-        fi
-    fi
-
-    if docker_cli ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$GPUSTACK_WORKER_NAME"; then
-        print_gpustack_info "移除已有容器: $GPUSTACK_WORKER_NAME"
-        docker_cli rm -f "$GPUSTACK_WORKER_NAME" 2>&1 | tee -a "$GPUSTACK_LOG_FILE" || true
-    fi
-
-    local -a run_args=(
-        run -d
-        --name "$GPUSTACK_WORKER_NAME"
-        -e "GPUSTACK_RUNTIME_DEPLOY_MIRRORED_NAME=gpustack-worker"
-        -e "GPUSTACK_TOKEN=${GPUSTACK_TOKEN}"
-        --restart=unless-stopped
-        --privileged
-        --network=host
-        --volume /var/run/docker.sock:/var/run/docker.sock
-        --volume gpustack-data:/var/lib/gpustack
-    )
-
-    if check_nvidia_gpu_support; then
-        print_gpustack_info "检测到 NVIDIA GPU，使用 NVIDIA runtime 启动 Worker"
-        run_args+=(--runtime nvidia)
-    else
-        print_gpustack_info "未检测到 NVIDIA GPU，以 CPU 模式启动 Worker"
-    fi
-
-    run_args+=(
-        "$GPUSTACK_WORKER_IMAGE"
-        --server-url "$server_url"
-        --worker-ip "$worker_ip"
-    )
-
-    print_gpustack_info "启动 GPUStack Worker: server-url=$server_url, worker-ip=$worker_ip"
-    if docker_cli "${run_args[@]}" 2>&1 | tee -a "$GPUSTACK_LOG_FILE"; then
-        print_gpustack_success "GPUStack Worker 已启动: $GPUSTACK_WORKER_NAME"
-        print_gpustack_info "查看日志: docker logs -f $GPUSTACK_WORKER_NAME"
-        print_gpustack_info "GPUStack 部署日志: $GPUSTACK_LOG_FILE"
-        return 0
-    fi
-
-    print_gpustack_error "GPUStack Worker 启动失败"
-    return 1
-}
-
-# 停止 GPUStack Worker
-stop_gpustack_worker() {
-    if docker_cli ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$GPUSTACK_WORKER_NAME"; then
-        print_gpustack_info "停止 GPUStack Worker: $GPUSTACK_WORKER_NAME"
-        docker_cli stop "$GPUSTACK_WORKER_NAME" 2>&1 | tee -a "$GPUSTACK_LOG_FILE" || true
-    fi
-}
-
-# Dify Compose 命令（独立 project，避免与中间件 compose 冲突）
-dify_compose() {
-    if [ ! -f "$DIFY_COMPOSE_FILE" ]; then
-        return 1
-    fi
-    local -a compose_args=(-f "$DIFY_COMPOSE_FILE" --project-name "$DIFY_PROJECT_NAME")
-    if [ -f "$DIFY_OVERRIDE_FILE" ]; then
-        compose_args+=(-f "$DIFY_OVERRIDE_FILE")
-    fi
-    $COMPOSE_CMD "${compose_args[@]}" "$@"
-}
-
-# 下载 Dify 官方 Docker 部署文件（仅首次）
-prepare_dify_bundle() {
-    if [ -f "$DIFY_COMPOSE_FILE" ]; then
-        print_dify_info "Dify ${DIFY_VERSION} 部署文件已就绪: $DIFY_DIR"
-        return 0
-    fi
-
-    print_dify_section "准备 Dify ${DIFY_VERSION} 部署文件"
-
-    if ! check_command git; then
-        print_dify_error "需要 git 以下载 Dify ${DIFY_VERSION} 部署文件"
-        return 1
-    fi
-
-    mkdir -p "$DIFY_DIR"
-    local upstream_dir="${DIFY_DIR}/.upstream"
-    rm -rf "$upstream_dir"
-
-    print_dify_info "从 Gitee 拉取 dify_ai/dify:${DIFY_VERSION} ..."
-    if ! git clone --depth 1 --branch "${DIFY_VERSION}" https://gitee.com/dify_ai/dify.git "$upstream_dir" 2>&1 | tee -a "$DIFY_LOG_FILE"; then
-        print_dify_error "下载 Dify 部署文件失败"
-        rm -rf "$upstream_dir"
-        return 1
-    fi
-
-    if [ ! -f "${upstream_dir}/docker/docker-compose.yaml" ]; then
-        print_dify_error "Dify 仓库中未找到 docker/docker-compose.yaml"
-        rm -rf "$upstream_dir"
-        return 1
-    fi
-
-    # 同步官方 docker 目录，保留本仓库自带的 override
-    if command -v rsync &>/dev/null; then
-        rsync -a --exclude='docker-compose.override.yml' "${upstream_dir}/docker/" "${DIFY_DIR}/" 2>&1 | tee -a "$DIFY_LOG_FILE"
-    else
-        cp -a "${upstream_dir}/docker/." "${DIFY_DIR}/"
-    fi
-    rm -rf "$upstream_dir"
-
-    if [ ! -f "$DIFY_COMPOSE_FILE" ]; then
-        print_dify_error "Dify docker-compose.yaml 未生成"
-        return 1
-    fi
-
-    print_dify_success "Dify ${DIFY_VERSION} 部署文件已下载到 $DIFY_DIR"
-    return 0
-}
-
-# 写入/更新 Dify .env 中的单个变量
-_dify_set_env_var() {
-    local key="$1"
-    local val="$2"
-    local env_file="${DIFY_DIR}/.env"
-
-    if [ ! -f "$env_file" ]; then
-        return 1
-    fi
-
-    if grep -q "^${key}=" "$env_file" 2>/dev/null; then
-        sed -i "s|^${key}=.*|${key}=${val}|" "$env_file"
-    else
-        echo "${key}=${val}" >> "$env_file"
-    fi
-}
-
-# 根据宿主机 IP 生成 Dify 对外访问 URL 并写入 .env
-prepare_dify_env() {
-    local host_ip dify_base_url
-    host_ip=$(get_host_ip)
-    if [ -z "$host_ip" ]; then
-        host_ip="localhost"
-        print_dify_warning "无法获取宿主机 IP，Dify 对外 URL 将使用 localhost"
-    fi
-
-    dify_base_url="http://${host_ip}:${DIFY_HTTP_PORT}"
-    export DIFY_PUBLIC_URL="$dify_base_url"
-
-    if [ ! -f "${DIFY_DIR}/.env" ]; then
-        if [ -f "${DIFY_DIR}/.env.example" ]; then
-            cp "${DIFY_DIR}/.env.example" "${DIFY_DIR}/.env"
-        else
-            print_dify_error "未找到 ${DIFY_DIR}/.env.example"
-            return 1
-        fi
-    fi
-
-    _dify_set_env_var "EXPOSE_NGINX_PORT" "${DIFY_HTTP_PORT}"
-    _dify_set_env_var "NGINX_PORT" "80"
-    # 仅写站点根 URL；dify-web entrypoint 会追加 /console/api、/api，api 侧也会拼接路径
-    _dify_set_env_var "CONSOLE_API_URL" "${dify_base_url}"
-    _dify_set_env_var "CONSOLE_WEB_URL" "${dify_base_url}"
-    _dify_set_env_var "SERVICE_API_URL" "${dify_base_url}"
-    _dify_set_env_var "APP_API_URL" "${dify_base_url}"
-    _dify_set_env_var "APP_WEB_URL" "${dify_base_url}"
-    _dify_set_env_var "FILES_URL" "${dify_base_url}"
-    _dify_set_env_var "INTERNAL_FILES_URL" "${dify_base_url}"
-    _dify_set_env_var "TRIGGER_URL" "${dify_base_url}"
-    _dify_set_env_var "ENDPOINT_URL_TEMPLATE" "${dify_base_url}/e/{hook_id}"
-    _dify_set_env_var "NEXT_PUBLIC_SOCKET_URL" "ws://${host_ip}:${DIFY_HTTP_PORT}"
-    _dify_set_env_var "VECTOR_STORE" "weaviate"
-    _dify_set_env_var "DB_TYPE" "postgresql"
-    _dify_set_env_var "COMPOSE_PROFILES" "weaviate,postgresql,collaboration"
-
-    print_dify_info "Dify 访问地址: ${dify_base_url}"
-    print_dify_info "首次使用请访问 ${dify_base_url}/install 完成管理员初始化"
-    return 0
-}
-
-# 创建 Dify 数据目录
-create_dify_storage_directories() {
-    local -a dify_dirs=(
-        "${DIFY_DIR}/volumes/app/storage"
-        "${DIFY_DIR}/volumes/db/data"
-        "${DIFY_DIR}/volumes/redis/data"
-        "${DIFY_DIR}/volumes/sandbox/dependencies"
-        "${DIFY_DIR}/volumes/sandbox/conf"
-        "${DIFY_DIR}/volumes/plugin_daemon"
-        "${DIFY_DIR}/volumes/weaviate"
-    )
-
-    for dir_path in "${dify_dirs[@]}"; do
-        mkdir -p "$dir_path" 2>/dev/null || true
-        run_priv chmod -R 777 "$dir_path" 2>/dev/null || true
-    done
-}
-
-# 拉取 Dify 所需镜像——仅拉取本地缺失的。
-# 全部已存在时零网络请求：原先无条件 `dify_compose pull` 每次都全量联表镜像源，
-# 源端一个 blob 抖动/超时就把"本可纯离线启动"的部署搞失败，且慢。
-check_and_pull_dify_images() {
-    if [ ! -f "$DIFY_COMPOSE_FILE" ]; then
-        return 0
-    fi
-
-    print_dify_info "检查 Dify 镜像..."
-    # compose v2 用 config --images 枚举镜像清单；v1 回退解析 config 输出
-    local imgs img
-    local missing=()
-    imgs=$(dify_compose config --images 2>/dev/null) \
-        || imgs=$(dify_compose config 2>/dev/null | awk '$1=="image:"{print $2}')
-    if [ -z "$imgs" ]; then
-        print_dify_warning "无法枚举 Dify 镜像清单，跳过预拉取（up 时会按需拉取）"
-        return 0
-    fi
-    for img in $imgs; do
-        docker image inspect "$img" >/dev/null 2>&1 || missing+=("$img")
-    done
-    if [ ${#missing[@]} -eq 0 ]; then
-        print_dify_success "Dify 镜像均已存在，跳过拉取"
-        return 0
-    fi
-    print_dify_info "缺失 ${#missing[@]} 个镜像，开始拉取: ${missing[*]}"
-    local fail=0
-    for img in "${missing[@]}"; do
-        docker pull "$img" 2>&1 | tee -a "$DIFY_LOG_FILE"
-        [ "${PIPESTATUS[0]}" -ne 0 ] && fail=1
-    done
-    if [ "$fail" -ne 0 ]; then
-        print_dify_warning "部分 Dify 镜像拉取失败，up 时将自动重试"
-        return 1
-    fi
-    print_dify_success "Dify 镜像检查完成"
-    return 0
-}
-
-# 等待 Dify Web 就绪
-wait_for_dify() {
-    local max_wait=180
-    local waited=0
-
-    print_dify_info "等待 Dify 就绪（端口 ${DIFY_HTTP_PORT}）..."
-    while [ "$waited" -lt "$max_wait" ]; do
-        if curl -sf --connect-timeout 3 "http://127.0.0.1:${DIFY_HTTP_PORT}/" >/dev/null 2>&1; then
-            print_dify_success "Dify 已就绪: ${DIFY_PUBLIC_URL:-http://localhost:${DIFY_HTTP_PORT}}"
-            return 0
-        fi
-        sleep 5
-        waited=$((waited + 5))
-    done
-
-    print_dify_warning "Dify 未在 ${max_wait}s 内就绪，请稍后检查: docker compose -p ${DIFY_PROJECT_NAME} ps"
-    return 1
-}
-
-# 打印 Dify 访问说明
-print_dify_access_guide() {
-    echo ""
-    print_dify_section "Dify 访问说明"
-    print_dify_info "控制台: ${DIFY_PUBLIC_URL:-http://localhost:${DIFY_HTTP_PORT}}"
-    print_dify_info "首次安装请访问: ${DIFY_PUBLIC_URL:-http://localhost:${DIFY_HTTP_PORT}}/install"
-    print_dify_info "部署日志: ${DIFY_LOG_FILE}"
-    echo ""
-}
-
-# 部署 Dify 1.14.2
-deploy_dify() {
-    if [ "$SKIP_DIFY" = "true" ]; then
-        print_dify_info "已设置 SKIP_DIFY=true，跳过 Dify 部署"
-        return 0
-    fi
-    print_dify_section "部署 Dify ${DIFY_VERSION}"
-
-    if ! docker_cli ps &>/dev/null; then
-        print_dify_error "无法访问 Docker，跳过 Dify 部署"
-        return 1
-    fi
-
-    if ! prepare_dify_bundle; then
-        return 1
-    fi
-
-    if ! prepare_dify_env; then
-        return 1
-    fi
-
-    create_dify_storage_directories
-
-    check_and_pull_dify_images || true
-
-    print_dify_info "启动 Dify 服务（project=${DIFY_PROJECT_NAME}）..."
-    # 取 PIPESTATUS[0]（tee 恒 0，`if 管道` 检测不到 up 失败）
-    dify_compose up -d 2>&1 | tee -a "$DIFY_LOG_FILE"
-    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
-        print_dify_error "Dify 启动失败"
-        return 1
-    fi
-
-    wait_for_dify || true
-    print_dify_access_guide
-    print_dify_success "Dify ${DIFY_VERSION} 部署完成"
-    return 0
-}
-
-# 停止 Dify
-stop_dify() {
-    if [ ! -f "$DIFY_COMPOSE_FILE" ]; then
-        return 0
-    fi
-
-    print_dify_info "停止 Dify 服务..."
-    dify_compose down 2>&1 | tee -a "$DIFY_LOG_FILE" || true
 }
 
 # 在安装 SRS 之前创建宿主机 /data（SRS 配置中 srs_log_file、dvr_path 使用容器内 /data；compose 挂载 /data:/data）
@@ -5085,10 +4216,6 @@ check_and_pull_images() {
         # 匹配 image: 行，支持多种格式
         if echo "$line" | grep -qE "^\s*image:"; then
             local image=$(echo "$line" | sed -E 's/^\s*image:\s*//' | sed -E "s/^['\"]//" | sed -E "s/['\"]$//" | tr -d ' ')
-            # 跳过 GPUStack 时不检查/拉取其镜像（镜像较大，避免无谓拉取）
-            if [ "$SKIP_GPUSTACK" = "true" ] && echo "$image" | grep -qi "gpustack"; then
-                continue
-            fi
             if [ -n "$image" ] && [[ ! " ${images_to_check[@]} " =~ " ${image} " ]]; then
                 images_to_check+=("$image")
             fi
@@ -5182,12 +4309,6 @@ extract_ports_from_compose() {
             "Milvus")
                 ports=("19530" "9091")
                 ;;
-            "GPUStack")
-                ports=("10180" "10161")
-                ;;
-            "Dify")
-                ports=("${DIFY_HTTP_PORT}")
-                ;;
         esac
     fi
     
@@ -5223,8 +4344,6 @@ check_and_clean_ports() {
             "EMQX") container_name="emqx-server" ;;
             "ZLMediaKit") container_name="zlmediakit-server" ;;
             "Milvus") container_name="milvus-server" ;;
-            "GPUStack") container_name="gpustack-server" ;;
-            "Dify") container_name="${DIFY_PROJECT_NAME}-nginx-1" ;;
         esac
         
         if [ -n "$container_name" ]; then
@@ -5813,8 +4932,6 @@ check_and_clean_ports() {
                                     "EMQX") container_name="emqx-server" ;;
                                     "ZLMediaKit") container_name="zlmediakit-server" ;;
                                     "Milvus") container_name="milvus-server" ;;
-                                                                                                                                    "GPUStack") container_name="gpustack-server" ;;
-                                    "Dify") container_name="${DIFY_PROJECT_NAME}-nginx-1" ;;
                                 esac
                                 
                                 if [ -n "$container_name" ]; then
@@ -5937,14 +5054,12 @@ cleanup_stale_containers() {
                 "VSCode") container_names+=("openvscode-server") ;;
                 "EMQX") container_names+=("emqx-server") ;;
                 "ZLMediaKit") container_names+=("zlmediakit-server") ;;
-                "GPUStack") container_names+=("gpustack-server") ;;
-                "Dify") container_names+=("${DIFY_PROJECT_NAME}-nginx-1") ;;
             esac
         fi
     done
     
     # 检查是否有停止的容器需要清理
-    local stale_containers=$(docker ps -a --filter "status=exited" --format "{{.Names}}" 2>/dev/null | grep -E "(nacos-server|postgres-server|tdengine-server|redis-server|kafka-server|minio-server|milvus-server|srs-server|nodered-server|openvscode-server|emqx-server|zlmediakit-server|gpustack-server|gpustack-worker|${DIFY_PROJECT_NAME}-)" || echo "")
+    local stale_containers=$(docker ps -a --filter "status=exited" --format "{{.Names}}" 2>/dev/null | grep -E "(nacos-server|postgres-server|tdengine-server|redis-server|kafka-server|minio-server|milvus-server|srs-server|nodered-server|openvscode-server|emqx-server|zlmediakit-server)" || echo "")
     
     if [ -n "$stale_containers" ]; then
         print_info "发现残留的停止容器，正在清理..."
@@ -6071,9 +5186,6 @@ install_middleware() {
     # 准备 ZLMediaKit 配置文件
     prepare_zlmediakit_config
 
-    # GPUStack Worker 注册地址
-    prepare_gpustack_env
-
     
     # 检查并拉取缺失的镜像（如果镜像已存在则跳过拉取）
     echo ""
@@ -6088,7 +5200,7 @@ install_middleware() {
     print_section "启动 Milvus 等中间件容器"
     print_info "启动所有中间件服务..."
     # 取 PIPESTATUS[0] 判定（tee 恒 0，`if 管道` 永远走成功分支，失败会被掩盖）
-    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d $(compose_service_args) 2>&1 | tee -a "$LOG_FILE"
+    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d 2>&1 | tee -a "$LOG_FILE"
     _up_rc=${PIPESTATUS[0]}
     if [ "${_up_rc}" -eq 0 ]; then
         print_success "容器启动命令执行完成"
@@ -6126,8 +5238,6 @@ install_middleware() {
             "EMQX") container_name="emqx-server" ;;
             "ZLMediaKit") container_name="zlmediakit-server" ;;
             "Milvus") container_name="milvus-server" ;;
-            "GPUStack") container_name="gpustack-server" ;;
-            "Dify") container_name="${DIFY_PROJECT_NAME}-nginx-1" ;;
         esac
         
         if [ -n "$container_name" ]; then
@@ -6149,9 +5259,7 @@ install_middleware() {
             case "$service" in
                 "TDengine") print_info "  docker logs tdengine-server" ;;
                 "Redis") print_info "  docker logs redis-server" ;;
-                "GPUStack") print_info "  docker logs gpustack-server" ;;
                 "Milvus") print_info "  docker logs milvus-server" ;;
-                "Dify") print_info "  cd ${DIFY_DIR} && docker compose -p ${DIFY_PROJECT_NAME} logs" ;;
                 *) print_info "  docker-compose logs $service" ;;
             esac
         done
@@ -6163,26 +5271,10 @@ install_middleware() {
     print_section "部署 Milvus 向量数据库"
     wait_for_milvus || print_warning "Milvus 未就绪，人脸识别等向量检索功能可能不可用"
 
-    # 部署 GPUStack Worker（本机算力节点）
-    echo ""
-    wait_for_gpustack_server || true
-    deploy_gpustack_worker || print_gpustack_warning "GPUStack Worker 部署失败，可稍后手动部署 Worker"
-
-    # 部署 Dify（独立 compose）
-    echo ""
-    deploy_dify || print_dify_warning "Dify 部署失败，可稍后重新执行: ./install_middleware_linux.sh start"
-    
     print_success "中间件安装完成"
     echo ""
     print_info "Milvus 向量库: http://localhost:9091/healthz, gRPC localhost:19530"
     print_info "  查看日志: ./install_middleware_linux.sh logs Milvus"
-    print_gpustack_info "GPUStack 资源管控: http://localhost:10180"
-    print_gpustack_info "  用户: admin"
-    print_gpustack_info "  密码: ${GPUSTACK_BOOTSTRAP_PASSWORD:-basiclab@iotp4JWmQSvzdh0z4mF}"
-    print_gpustack_info "  部署日志: ${GPUSTACK_LOG_FILE}"
-    print_dify_info "Dify LLM 平台: http://localhost:${DIFY_HTTP_PORT}"
-    print_dify_info "  首次安装: http://localhost:${DIFY_HTTP_PORT}/install"
-    print_dify_info "  部署日志: ${DIFY_LOG_FILE}"
     print_info "VSCode 后处理 IDE: http://localhost:10192"
     echo ""
     # 不再固定 sleep 10：下方 ensure_postgresql_password 内部自带 wait_for_postgresql 精确等待
@@ -6246,9 +5338,6 @@ start_middleware() {
     # 准备 ZLMediaKit 配置文件
     prepare_zlmediakit_config
 
-    # GPUStack Worker 注册地址
-    prepare_gpustack_env
-
     
     # 清理残留容器
     cleanup_stale_containers
@@ -6286,15 +5375,6 @@ start_middleware() {
     configure_postgresql_max_connections
 
 
-    # 部署 GPUStack Worker（本机算力节点）
-    echo ""
-    wait_for_gpustack_server || true
-    deploy_gpustack_worker || print_gpustack_warning "GPUStack Worker 部署失败"
-
-    # 启动 Dify
-    echo ""
-    deploy_dify || print_dify_warning "Dify 启动失败"
-    
     sleep 5
     bash "${SCRIPT_DIR}/set_permanent_token.sh" >/dev/null 2>&1 || true
 }
@@ -6308,8 +5388,6 @@ stop_middleware() {
     check_compose_file
     
     print_info "停止所有中间件服务..."
-    stop_gpustack_worker
-    stop_dify
     $COMPOSE_CMD -f "$COMPOSE_FILE" down 2>&1 | tee -a "$LOG_FILE"
     
     print_success "所有中间件已停止"
@@ -6341,12 +5419,6 @@ restart_middleware() {
     # 准备 ZLMediaKit 配置文件
     prepare_zlmediakit_config
 
-    # GPUStack Worker 注册地址
-    prepare_gpustack_env
-
-    # 再次确保内嵌 PostgreSQL 目录权限正确（避免 777 导致 gpustack-server 无法启动）
-    fix_gpustack_postgresql_permissions
-
     print_info "重启所有中间件服务..."
     $COMPOSE_CMD -f "$COMPOSE_FILE" restart 2>&1 | tee -a "$LOG_FILE"
     
@@ -6370,15 +5442,6 @@ restart_middleware() {
     configure_postgresql_max_connections
 
 
-    # 重新部署 GPUStack Worker
-    echo ""
-    wait_for_gpustack_server || true
-    deploy_gpustack_worker || print_gpustack_warning "GPUStack Worker 部署失败"
-
-    # 重启 Dify
-    echo ""
-    deploy_dify || print_dify_warning "Dify 重启失败"
-    
     sleep 5
     bash "${SCRIPT_DIR}/set_permanent_token.sh" >/dev/null 2>&1 || true
 }
@@ -6393,19 +5456,6 @@ status_middleware() {
     
     $COMPOSE_CMD -f "$COMPOSE_FILE" ps 2>&1 | tee -a "$LOG_FILE"
 
-    echo ""
-    print_gpustack_section "GPUStack 状态"
-    $COMPOSE_CMD -f "$COMPOSE_FILE" ps GPUStack 2>&1 | tee -a "$GPUSTACK_LOG_FILE" || true
-    if docker_cli ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$GPUSTACK_WORKER_NAME"; then
-        print_gpustack_info "Worker 容器:"
-        docker_cli ps -a --filter "name=^${GPUSTACK_WORKER_NAME}$" 2>&1 | tee -a "$GPUSTACK_LOG_FILE" || true
-    fi
-
-    if [ -f "$DIFY_COMPOSE_FILE" ]; then
-        echo ""
-        print_dify_section "Dify 服务状态"
-        dify_compose ps 2>&1 | tee -a "$DIFY_LOG_FILE" || true
-    fi
 }
 
 # 查看日志
@@ -6416,43 +5466,9 @@ view_logs() {
     check_docker_compose
     check_compose_file
 
-    if [ "$service" = "GPUStack" ] || [ "$service" = "gpustack" ]; then
-        print_gpustack_section "GPUStack 容器日志"
-        $COMPOSE_CMD -f "$COMPOSE_FILE" logs --tail=100 GPUStack 2>&1 | tee -a "$GPUSTACK_LOG_FILE"
-        if docker_cli ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$GPUSTACK_WORKER_NAME"; then
-            echo ""
-            print_gpustack_info "GPUStack Worker 日志:"
-            docker_cli logs --tail=100 "$GPUSTACK_WORKER_NAME" 2>&1 | tee -a "$GPUSTACK_LOG_FILE"
-        fi
-        print_gpustack_info "日志文件: ${GPUSTACK_LOG_FILE}"
-        return
-    fi
-    
-    if [ "$service" = "Dify" ] || [ "$service" = "dify" ]; then
-        if [ -f "$DIFY_COMPOSE_FILE" ]; then
-            print_dify_section "Dify 容器日志"
-            dify_compose logs --tail=100 2>&1 | tee -a "$DIFY_LOG_FILE"
-            print_dify_info "日志文件: ${DIFY_LOG_FILE}"
-        else
-            print_dify_error "Dify 尚未部署"
-        fi
-        return
-    fi
-
     if [ -z "$service" ]; then
         print_info "查看主中间件 compose 日志..."
         $COMPOSE_CMD -f "$COMPOSE_FILE" logs --tail=100 2>&1 | tee -a "$LOG_FILE"
-        echo ""
-        print_gpustack_section "GPUStack 日志"
-        $COMPOSE_CMD -f "$COMPOSE_FILE" logs --tail=50 GPUStack 2>&1 | tee -a "$GPUSTACK_LOG_FILE" || true
-        if docker_cli ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$GPUSTACK_WORKER_NAME"; then
-            docker_cli logs --tail=50 "$GPUSTACK_WORKER_NAME" 2>&1 | tee -a "$GPUSTACK_LOG_FILE" || true
-        fi
-        if [ -f "$DIFY_COMPOSE_FILE" ]; then
-            echo ""
-            print_dify_section "Dify 日志"
-            dify_compose logs --tail=50 2>&1 | tee -a "$DIFY_LOG_FILE" || true
-        fi
     else
         print_info "查看 $service 服务日志..."
         $COMPOSE_CMD -f "$COMPOSE_FILE" logs --tail=100 "$service" 2>&1 | tee -a "$LOG_FILE"
@@ -6533,8 +5549,6 @@ clean_middleware() {
         
         # 第一步：先停止所有容器（正常停止）
         print_info "正在停止所有中间件服务..."
-        stop_gpustack_worker
-        stop_dify
         $COMPOSE_CMD -f "$COMPOSE_FILE" stop 2>&1 | tee -a "$LOG_FILE"
         
         # 等待容器停止
@@ -6589,19 +5603,6 @@ clean_middleware() {
             echo "$zlmediakit_containers" | xargs -r docker rm -f 2>&1 | tee -a "$LOG_FILE"
         fi
 
-        # 删除 GPUStack Worker（独立容器，不在 compose 中）
-        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$GPUSTACK_WORKER_NAME"; then
-            print_info "删除 GPUStack Worker 容器: $GPUSTACK_WORKER_NAME"
-            docker_cli rm -f "$GPUSTACK_WORKER_NAME" 2>&1 | tee -a "$GPUSTACK_LOG_FILE" || true
-        fi
-
-        # 删除 Dify 容器与卷
-        if [ -f "$DIFY_COMPOSE_FILE" ]; then
-            print_info "删除 Dify 容器与数据卷..."
-            dify_compose down -v 2>&1 | tee -a "$DIFY_LOG_FILE" || true
-        fi
-        rm -f "$DIFY_GPUSTACK_API_KEY_FILE" 2>/dev/null || true
-        
         # 第五步：删除所有 bind mount 的宿主机存储目录
         print_info "删除所有 bind mount 存储目录..."
         
@@ -6615,8 +5616,6 @@ clean_middleware() {
             "minio_data"                # MinIO 数据和配置
             "milvus_data"               # Milvus 数据
             "milvus_config"             # Milvus 嵌入式 etcd 配置
-            "gpustack_data"             # GPUStack 数据
-            "dify_data"                 # Dify 部署目录（含 volumes、compose 与 .env）
             "srs_data"                  # SRS 配置、数据和回放
             "nodered_data"              # NodeRED 数据
         )
@@ -6749,9 +5748,6 @@ update_middleware() {
     # 准备 ZLMediaKit 配置文件
     prepare_zlmediakit_config
 
-    # GPUStack Worker 注册地址
-    prepare_gpustack_env
-
     
     # 检查并拉取缺失的镜像（如果镜像已存在则跳过拉取）
     echo ""
@@ -6760,7 +5756,7 @@ update_middleware() {
     cleanup_renamed_containers
     fix_nacos_derby_corruption
     print_info "重启所有中间件服务..."
-    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d $(compose_service_args) 2>&1 | tee -a "$LOG_FILE"
+    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d 2>&1 | tee -a "$LOG_FILE"
     _up_rc=${PIPESTATUS[0]}   # 必须紧跟管道取退出码：tee 恒 0，直接判管道会把失败误报成成功
     ensure_nacos_admin_user
 
@@ -6775,14 +5771,6 @@ update_middleware() {
     wait_for_milvus || print_warning "Milvus 未就绪"
 
 
-    # 部署 GPUStack Worker（本机算力节点）
-    echo ""
-    wait_for_gpustack_server || true
-    deploy_gpustack_worker || print_gpustack_warning "GPUStack Worker 部署失败"
-
-    # 更新 Dify
-    echo ""
-    deploy_dify || print_dify_warning "Dify 更新失败"
 }
 
 # 显示帮助信息
@@ -6807,11 +5795,9 @@ show_help() {
     echo "  help            - 显示此帮助信息"
     echo ""
     echo "环境变量:"
-    echo "  SKIP_GPUSTACK=true  - 跳过 GPUStack（Server/Worker/镜像/数据目录递归权限），加速部署"
-    echo "  SKIP_DIFY=true      - 跳过 Dify（独立 compose 部署/镜像/数据目录递归权限），加速部署"
     echo "  FORCE_CHMOD=true    - 对已存在的数据目录强制完整递归 chmod 修复（默认只设顶层，数据量大时慢）"
     echo "                        仅在怀疑既有目录权限损坏、容器读写报错时使用一次"
-    echo "                        示例: SKIP_GPUSTACK=true SKIP_DIFY=true ./install_middleware_linux.sh update"
+    echo "                        示例: FORCE_CHMOD=true ./install_middleware_linux.sh update"
     echo "                        修复示例: FORCE_CHMOD=true ./install_middleware_linux.sh update"
     echo ""
     echo "中间件服务列表:"
@@ -6823,15 +5809,6 @@ show_help() {
     echo "  健康检查: http://localhost:9091/healthz"
     echo "  gRPC: localhost:19530"
     echo "  日志: ./install_middleware_linux.sh logs Milvus"
-    echo ""
-    echo "GPUStack 资源管控:"
-    echo "  访问: http://localhost:10180"
-    echo "  日志: ./install_middleware_linux.sh logs GPUStack"
-    echo ""
-    echo "Dify LLM 平台（${DIFY_VERSION}）:"
-    echo "  访问: http://localhost:${DIFY_HTTP_PORT}"
-    echo "  首次安装: http://localhost:${DIFY_HTTP_PORT}/install"
-    echo "  日志: ./install_middleware_linux.sh logs Dify"
     echo ""
 }
 
@@ -6897,19 +5874,5 @@ if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
     echo "脚本结束时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
     echo "=========================================" >> "$LOG_FILE"
 fi
-if [ -n "$GPUSTACK_LOG_FILE" ] && [ -f "$GPUSTACK_LOG_FILE" ]; then
-    echo "" >> "$GPUSTACK_LOG_FILE"
-    echo "=========================================" >> "$GPUSTACK_LOG_FILE"
-    echo "脚本结束时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$GPUSTACK_LOG_FILE"
-    echo "=========================================" >> "$GPUSTACK_LOG_FILE"
-fi
-if [ -n "$DIFY_LOG_FILE" ] && [ -f "$DIFY_LOG_FILE" ]; then
-    echo "" >> "$DIFY_LOG_FILE"
-    echo "=========================================" >> "$DIFY_LOG_FILE"
-    echo "脚本结束时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$DIFY_LOG_FILE"
-    echo "=========================================" >> "$DIFY_LOG_FILE"
-fi
 echo ""
 print_info "主日志: $LOG_FILE"
-[ -f "$GPUSTACK_LOG_FILE" ] && print_gpustack_info "GPUStack 日志: $GPUSTACK_LOG_FILE"
-[ -f "$DIFY_LOG_FILE" ] && print_dify_info "Dify 日志: $DIFY_LOG_FILE"
