@@ -266,7 +266,10 @@ class SamService:
                     cls_names = boxes.cls_name
                 elif hasattr(res, 'names'):
                     cls_ids = boxes.cls.cpu().numpy() if hasattr(boxes.cls, 'cpu') else np.array(boxes.cls)
-                    cls_names = [res.names.get(int(c), str(int(c))) for c in cls_ids]
+                    names = res.names
+                    if isinstance(names, (list, tuple)):
+                        names = {idx: nm for idx, nm in enumerate(names)}
+                    cls_names = [names.get(int(c), str(int(c))) for c in cls_ids]
 
                 for i in range(len(xyxy)):
                     x1, y1, x2, y2 = [float(v) for v in xyxy[i][:4]]
