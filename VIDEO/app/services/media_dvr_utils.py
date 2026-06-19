@@ -5,13 +5,18 @@ import logging
 import os
 import subprocess
 import time
-from datetime import datetime as dt
+from datetime import datetime as dt, timezone as _tz, timedelta as _td
 from typing import Optional, Tuple
 
 import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# SRS DVR 文件名中的 [timestamp] 是 Unix 纪元毫秒（UTC 基准）。当容器时钟实际为 UTC
+# （例如 TZ=Asia/Shanghai 但缺 tzdata，fromtimestamp 退化为 UTC 墙钟）时，必须显式按
+# 上海时区换算为本地墙钟时间，才能与按 +08 存储的告警 time 对齐匹配 record_path。
+_SHANGHAI_TZ = _tz(_td(hours=8))
 
 
 def srs_dvr_min_file_bytes() -> int:
@@ -28,9 +33,9 @@ def parse_srs_dvr_segment_start_from_filename(absolute_file_path: str):
         return None
     try:
         ts = int(stem)
-        if ts > 10**12:
-            return dt.fromtimestamp(ts / 1000.0)
-        return dt.fromtimestamp(float(ts))
+        epoch_seconds = ts / 1000.0 if ts > 10**12 else float(ts)
+        # 以上海时区解释纪元秒，再去掉 tzinfo 得到本地墙钟（21:xx 而非容器 UTC 的 13:xx）
+        return dt.fromtimestamp(epoch_seconds, tz=_SHANGHAI_TZ).replace(tzinfo=None)
     except (ValueError, OSError):
         return None
 
