@@ -102,6 +102,11 @@ VIDEO/face_capture_head_yolov8.onnx
 # AI 模型权重（大文件由 ModelScope 或安装脚本下载，不随仓库分发）
 AI/models/
 
+# IDE / 包管理器缓存 / 测试缓存（仅本机，不随仓库分发）
+.vscode/
+.pnpm-store/
+**/.pytest_cache/
+
 # Claude Code 个人配置与本地钩子（仅本机，不随仓库分发）
 .claude/settings.local.json
 .claude/changed-files-hook.sh

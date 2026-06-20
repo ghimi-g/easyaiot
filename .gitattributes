@@ -68,5 +68,9 @@ VIDEO/face_rec.onnx binary -diff
 # AI 模型权重目录（体积大，ModelScope/本地下载，不参与 diff）
 AI/models/** -diff
 
+# IDE / 包管理器缓存 / 测试缓存：不参与 diff
+.vscode/** -diff
+.pnpm-store/** -diff
+**/.pytest_cache/** -diff
 
 .image/ binary
