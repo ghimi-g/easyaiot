@@ -7,7 +7,7 @@
 #   ./install_linux_kylin.sh [命令]
 #
 # 可用命令：
-#   install    - 安装并启动所有服务（首次运行）
+#   install    - 安装并启动所有服务（首次运行，交互选择部署形态）
 #   start      - 启动所有服务
 #   stop       - 停止所有服务
 #   restart    - 重启所有服务
@@ -18,6 +18,12 @@
 #   update     - 更新并重启所有服务
 #   verify     - 验证所有服务是否启动成功
 #   check      - 检查 Docker 和 Docker Compose 安装状态
+#   profile    - 显示当前部署形态与服务范围
+#
+# 部署形态（EASYAIOT_DEPLOY_PROFILE）：
+#   mini(1)     - 4G：iot-system + VIDEO/AI/WEB + 最小中间件（无 Kafka/iot-sink/Nacos/Gateway/Infra）
+#   standard(2) - 16G：不含 TDengine/EMQX/iot-device/iot-tdengine/NodeRED
+#   full(3)     - 全量（默认，约 20G）
 # ============================================
 
 set -e
@@ -29,12 +35,30 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# 脚本所在目录（必须在 cd 之前计算：相对路径调用时，cd 后 dirname 会解析错位，
+# 曾导致日志目录落到项目根 /logs 而非 .scripts/docker/logs）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # 项目根目录（从.scripts/docker回到项目根目录）
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# 脚本所在目录
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=deploy_profile.sh
+source "${SCRIPT_DIR}/deploy_profile.sh"
+
+# shellcheck source=node/ensure_platform_agent_invoke.sh
+source "${PROJECT_ROOT}/.scripts/node/ensure_platform_agent_invoke.sh"
+
+_ensure_platform_agent_info() { print_info "$1"; }
+_ensure_platform_agent_ok() { print_success "$1"; }
+_ensure_platform_agent_warn() { print_warning "$1"; }
+
+ensure_platform_agent_after_stack() {
+    ENSURE_PLATFORM_AGENT_INFO=_ensure_platform_agent_info \
+    ENSURE_PLATFORM_AGENT_OK=_ensure_platform_agent_ok \
+    ENSURE_PLATFORM_AGENT_WARN=_ensure_platform_agent_warn \
+    ensure_platform_agent_if_needed || true
+}
 
 # 日志文件配置
 LOG_DIR="${SCRIPT_DIR}/logs"
@@ -130,18 +154,17 @@ print_section() {
     log_to_file ""
 }
 
-# 检测服务器架构并验证是否为ARM（麒麟系统）
+# 检测服务器架构并验证是否为 ARM（麒麟系统）
 detect_architecture() {
     print_info "检测服务器架构（麒麟系统）..."
     ARCH=$(uname -m)
-    
-    # 检测操作系统类型
+
     if [ -f /etc/kylin-release ] || [ -f /etc/neokylin-release ] || grep -qi "kylin" /etc/os-release 2>/dev/null; then
         print_success "检测到麒麟系统"
     else
         print_warning "未检测到麒麟系统标识，但继续执行（可能在其他国产系统上运行）"
     fi
-    
+
     case "$ARCH" in
         aarch64|arm64)
             ARCH="aarch64"
@@ -164,6 +187,74 @@ detect_architecture() {
             exit 1
             ;;
     esac
+}
+
+# 检测宿主机 IPv4 地址，并导出给子模块安装脚本和 docker compose 使用
+detect_host_ip() {
+    # 已显式导出 HOST_IP 时直接采用（错误提示承诺的逃生通道；也天然避免重复探测）
+    if [ -n "${HOST_IP:-}" ]; then
+        print_info "使用已设置的宿主机 IP: $HOST_IP"
+        return 0
+    fi
+
+    local host_ip=""
+
+    if check_command ip; then
+        host_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+    fi
+
+    if [ -z "$host_ip" ] && check_command hostname; then
+        host_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+
+    if [ -z "$host_ip" ] && check_command ip; then
+        host_ip=$(ip -4 addr show scope global 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -n 1)
+    fi
+
+    if [ -z "$host_ip" ]; then
+        print_error "无法自动检测宿主机 IP，无法为 GB28181/ZLM 注入正确的媒体地址"
+        print_info "请检查 iproute2/hostname 命令是否可用，或手动导出 HOST_IP 后重新执行脚本"
+        return 1
+    fi
+
+    export HOST_IP="$host_ip"
+    print_info "检测到宿主机 IP: $HOST_IP"
+    return 0
+}
+
+# 预留 ZLM RTP 端口段，避免被 Linux 临时端口抢占导致 ZLM 启动或收流异常
+configure_rtp_port_reservation() {
+    local sysctl_file="/etc/sysctl.d/99-zlm-rtp.conf"
+    local expected_config="net.ipv4.ip_local_reserved_ports = 30000-30500"
+
+    if [ "$(uname -s)" != "Linux" ]; then
+        return 0
+    fi
+
+    if [ "$EUID" -ne 0 ]; then
+        print_warning "配置 RTP 端口预留需要 root 权限，已跳过"
+        print_warning "建议使用 sudo 运行安装脚本，以固化 30000-30500 端口预留"
+        return 0
+    fi
+
+    mkdir -p /etc/sysctl.d
+
+    if [ -f "$sysctl_file" ] && grep -Fxq "$expected_config" "$sysctl_file"; then
+        print_info "RTP 端口预留已配置: 30000-30500"
+        return 0
+    fi
+
+    print_info "配置 Linux RTP 端口预留: 30000-30500"
+    cat > "$sysctl_file" << EOF
+$expected_config
+EOF
+    sysctl --system > /dev/null
+    print_success "RTP 端口预留已生效"
+}
+
+prepare_runtime_environment() {
+    detect_host_ip
+    configure_rtp_port_reservation
 }
 
 # 检查命令是否存在
@@ -245,8 +336,9 @@ check_docker_permission() {
     fi
 }
 
-# 检查 Docker 是否安装
+# 检查 Docker 是否安装（进程内幂等：同一次运行重复调用直接返回）
 check_docker() {
+    [ "${_DOCKER_CHECKED:-0}" = "1" ] && return 0
     print_info "检查 Docker 安装状态..."
     
     # 检查命令是否存在
@@ -282,55 +374,45 @@ check_docker() {
     
     # 检查权限和 daemon 状态
     check_docker_permission "$@"
+    _DOCKER_CHECKED=1
 }
 
-# 检查 Docker Compose 是否安装
-check_docker_compose() {
-    print_info "检查 Docker Compose 安装状态..."
-    
-    local version_output=""
-    local compose_found=false
-    
-    # 检查 docker-compose (v1)
+# 探测 Docker Compose（v1/v2 通用实现，check_docker_compose 与 check_environment 共用）
+# 设置全局：COMPOSE_CMD（v2 优先）、COMPOSE_V1_VERSION、COMPOSE_V2_VERSION（未安装为空）
+# 返回 0 表示至少一个版本可用
+detect_compose() {
+    COMPOSE_CMD=""
+    COMPOSE_V1_VERSION=""
+    COMPOSE_V2_VERSION=""
+
     if check_command docker-compose; then
-        COMPOSE_CMD="docker-compose"
-        version_output=$(docker-compose --version 2>/dev/null || echo "")
-        if [ -n "$version_output" ]; then
-            print_success "Docker Compose v1 已安装: $version_output"
-            compose_found=true
+        COMPOSE_V1_VERSION=$(docker-compose --version 2>/dev/null || true)
+        if [ -n "$COMPOSE_V1_VERSION" ]; then
+            COMPOSE_CMD="docker-compose"
         fi
     fi
-    
-    # 检查 docker compose (v2)
-    if docker compose version &> /dev/null 2>&1; then
+
+    if docker compose version &> /dev/null; then
+        COMPOSE_V2_VERSION=$(docker compose version --short 2>/dev/null || true)
+        if [ -z "$COMPOSE_V2_VERSION" ]; then
+            COMPOSE_V2_VERSION=$(docker compose version 2>&1 | grep -iE "version|docker compose" | head -1 | sed 's/^[[:space:]]*//' || true)
+        fi
+        # 个别版本输出帮助信息而非版本号：只标记可用
+        if [ -z "$COMPOSE_V2_VERSION" ] || echo "$COMPOSE_V2_VERSION" | grep -qiE "usage|command|options"; then
+            COMPOSE_V2_VERSION="命令可用"
+        fi
         COMPOSE_CMD="docker compose"
-        # 尝试多种方式获取版本信息
-        # 方法1: 直接使用 version 命令（v2 的标准输出）
-        version_output=$(docker compose version --short 2>/dev/null || echo "")
-        
-        # 方法2: 如果 --short 不可用，尝试解析完整输出
-        if [ -z "$version_output" ]; then
-            version_output=$(docker compose version 2>&1 | grep -E "version|Docker Compose" | head -1 | sed 's/^[[:space:]]*//' || echo "")
-        fi
-        
-        # 方法3: 如果还是无法获取，检查是否是帮助信息
-        if [ -z "$version_output" ] || echo "$version_output" | grep -qiE "usage|command|options"; then
-            # 尝试使用 docker compose 的其他方式获取版本
-            version_output=$(docker compose --version 2>/dev/null || docker compose version 2>&1 | head -1 || echo "")
-            if echo "$version_output" | grep -qiE "usage|command|options"; then
-                # 如果仍然是帮助信息，只显示命令可用
-                print_success "Docker Compose v2 已安装 (docker compose 命令可用)"
-            else
-                print_success "Docker Compose v2 已安装: $version_output"
-            fi
-        else
-            print_success "Docker Compose v2 已安装: $version_output"
-        fi
-        compose_found=true
     fi
-    
-    # 如果都不存在，报错
-    if [ "$compose_found" = false ]; then
+
+    [ -n "$COMPOSE_CMD" ]
+}
+
+# 检查 Docker Compose 是否安装（进程内幂等）
+check_docker_compose() {
+    [ "${_COMPOSE_CHECKED:-0}" = "1" ] && return 0
+    print_info "检查 Docker Compose 安装状态..."
+
+    if ! detect_compose; then
         print_error "Docker Compose 未安装"
         echo ""
         echo "安装方法："
@@ -344,363 +426,243 @@ check_docker_compose() {
         echo "  更多安装指南: https://docs.docker.com/compose/install/"
         exit 1
     fi
-    
-    # 显示使用的命令
+
+    if [ -n "$COMPOSE_V1_VERSION" ]; then
+        print_success "Docker Compose v1 已安装: $COMPOSE_V1_VERSION"
+    fi
+    if [ -n "$COMPOSE_V2_VERSION" ]; then
+        print_success "Docker Compose v2 已安装: $COMPOSE_V2_VERSION"
+    fi
     print_info "使用命令: $COMPOSE_CMD"
+    _COMPOSE_CHECKED=1
+}
+
+# Docker 镜像源（唯一允许的源，规整后用于比较与写入）
+DOCKER_MIRROR="https://docker.m.daocloud.io/"
+
+# 配置变更后按需重启 Docker（仅服务在运行时）
+restart_docker_if_active() {
+    if systemctl is-active --quiet docker; then
+        print_info "正在重启 Docker 服务以使配置生效..."
+        systemctl daemon-reload
+        systemctl restart docker
+        print_success "Docker 服务已重启"
+    fi
 }
 
 # 配置 Docker 镜像源
+# 优先用 jq（纯进程内 JSON 编辑，无解释器启动开销）；无 jq 退回精简版 python3；
+# 两者皆无时：文件不存在则直写最小配置，已存在则跳过（不敢盲改未知 JSON）。
 configure_docker_mirror() {
     print_info "配置 Docker 镜像源..."
-    
-    local docker_config_dir="/etc/docker"
-    local docker_config_file="$docker_config_dir/daemon.json"
-    
+
+    local config_file="/etc/docker/daemon.json"
+
     if [ "$EUID" -ne 0 ]; then
         print_warning "配置 Docker 镜像源需要 root 权限，跳过此步骤"
         return 0
     fi
-    
-    # 创建 docker 配置目录
-    mkdir -p "$docker_config_dir"
-    
-    # 使用 Python 精确检查和配置
-    print_info "正在检查并配置 Docker 镜像源..."
-    
-    local output_file=$(mktemp)
-    local python_exit_code=0
-    
-    python3 << EOF > "$output_file" 2>&1
-import json
-import sys
-import os
+    mkdir -p /etc/docker
 
-config_file = "$docker_config_file"
-# 只使用 DaoCloud 公共镜像源（https://github.com/DaoCloud/public-image-mirror）
-recommended_mirrors = [
-    "https://docker.m.daocloud.io/"
-]
+    # 文件不存在：无需任何 JSON 工具，直接写入最小配置
+    if [ ! -f "$config_file" ]; then
+        printf '{\n  "registry-mirrors": ["%s"]\n}\n' "$DOCKER_MIRROR" > "$config_file"
+        print_success "已写入 Docker 镜像源配置: $DOCKER_MIRROR"
+        restart_docker_if_active
+        return 0
+    fi
 
-# 读取现有配置
-config = {}
-if os.path.exists(config_file):
-    try:
-        with open(config_file, 'r') as f:
-            config = json.load(f)
-    except Exception as e:
-        print(f"CONFIG_ERROR:读取配置文件失败: {e}", file=sys.stderr)
-        sys.exit(1)
-
-needs_update = False
-changes = []
-
-# 设置镜像源为只包含 DaoCloud 公共镜像
-if "registry-mirrors" not in config:
-    config["registry-mirrors"] = recommended_mirrors
-    needs_update = True
-    changes.append("添加 registry-mirrors 配置")
-else:
-    # 检查现有镜像源是否只包含 DaoCloud 公共镜像
-    existing_mirrors = config.get("registry-mirrors", [])
-    if not isinstance(existing_mirrors, list):
-        existing_mirrors = []
-    
-    # 标准化镜像源地址（去除尾部斜杠）
-    normalized_recommended = [m.rstrip('/') for m in recommended_mirrors]
-    normalized_existing = [m.rstrip('/') for m in existing_mirrors]
-    
-    # 如果现有镜像源与推荐的不一致，则更新
-    if set(normalized_existing) != set(normalized_recommended):
-        config["registry-mirrors"] = recommended_mirrors
-        needs_update = True
-        changes.append(f"更新镜像源为: {', '.join(recommended_mirrors)}")
-
-# 写入配置文件
-if needs_update:
-    try:
-        with open(config_file, 'w') as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
-        print("CONFIG_UPDATED")
-        for change in changes:
-            print(f"CHANGE:{change}")
-    except Exception as e:
-        print(f"CONFIG_ERROR:{e}", file=sys.stderr)
-        sys.exit(1)
-else:
-    print("CONFIG_OK")
-EOF
-    
-    python_exit_code=$?
-    local config_updated=false
-    local config_ok=false
-    
-    # 解析 Python 输出
-    while IFS= read -r line || [ -n "$line" ]; do
-        if [[ $line == CONFIG_UPDATED ]]; then
-            config_updated=true
-        elif [[ $line == CONFIG_OK ]]; then
-            config_ok=true
-        elif [[ $line == CHANGE:* ]]; then
-            local change="${line#CHANGE:}"
-            print_info "配置变更: $change"
-        elif [[ $line == CONFIG_ERROR:* ]]; then
-            local error="${line#CONFIG_ERROR:}"
-            print_error "配置失败: $error"
-            rm -f "$output_file"
-            return 1
+    if check_command jq; then
+        # 已恰为目标镜像源（忽略尾斜杠差异）→ 零写入零重启
+        if jq -e --arg m "${DOCKER_MIRROR%/}" \
+            '(.["registry-mirrors"] // []) | map(rtrimstr("/")) == [$m]' \
+            "$config_file" > /dev/null 2>&1; then
+            print_success "Docker 镜像源配置已就绪（$DOCKER_MIRROR）"
+            return 0
         fi
-    done < "$output_file"
-    
-    rm -f "$output_file"
-    
-    if [ $python_exit_code -ne 0 ]; then
-        print_error "Docker 镜像源配置检查失败"
+        local tmp_json
+        tmp_json=$(mktemp)
+        if jq --arg m "$DOCKER_MIRROR" '.["registry-mirrors"] = [$m]' "$config_file" > "$tmp_json" 2>/dev/null; then
+            mv "$tmp_json" "$config_file"
+            print_success "Docker 镜像源已更新为 $DOCKER_MIRROR"
+            restart_docker_if_active
+            return 0
+        fi
+        rm -f "$tmp_json"
+        print_error "解析 $config_file 失败（非法 JSON？），请手动检查"
         return 1
     fi
-    
-    if [ "$config_ok" = true ]; then
-        print_success "Docker 镜像源配置已完整（已使用 https://docker.m.daocloud.io/）"
-    elif [ "$config_updated" = true ]; then
-        print_success "Docker 镜像源配置已更新为 https://docker.m.daocloud.io/"
-        
-        # 重启 Docker 服务使配置生效
-        if systemctl is-active --quiet docker; then
-            print_info "正在重启 Docker 服务以使配置生效..."
-            systemctl daemon-reload
-            systemctl restart docker
-            print_success "Docker 服务已重启"
-        fi
-    else
-        print_warning "Docker 镜像源配置检查完成，但未发现需要更新的配置"
+
+    if check_command python3; then
+        # 退出码约定：0=已就绪 3=已更新 其它=失败（|| 捕获以兼容 set -e）
+        local rc=0
+        python3 - "$config_file" "$DOCKER_MIRROR" <<'PYEOF' || rc=$?
+import json, sys
+path, mirror = sys.argv[1], sys.argv[2]
+cfg = json.load(open(path))
+cur = [m.rstrip('/') for m in cfg.get('registry-mirrors', []) if isinstance(m, str)]
+if cur == [mirror.rstrip('/')]:
+    sys.exit(0)
+cfg['registry-mirrors'] = [mirror]
+json.dump(cfg, open(path, 'w'), indent=2, ensure_ascii=False)
+sys.exit(3)
+PYEOF
+        case $rc in
+            0) print_success "Docker 镜像源配置已就绪（$DOCKER_MIRROR）" ;;
+            3) print_success "Docker 镜像源已更新为 $DOCKER_MIRROR"; restart_docker_if_active ;;
+            *) print_error "解析 $config_file 失败（非法 JSON？），请手动检查"; return 1 ;;
+        esac
+        return 0
     fi
+
+    print_warning "未安装 jq/python3 且 $config_file 已存在，跳过自动配置（请手动确认 registry-mirrors 含 $DOCKER_MIRROR）"
 }
 
 # 创建统一网络
+# 存在性用 docker network inspect 判断（本地 API 调用，毫秒级、离线可用）。
+# 不再用「拉取 alpine + ping 8.8.8.8」探测：该测试验证的是外网连通而非 bridge 健康，
+# 在离线/内网/防火墙环境必然失败，会把健康网络误判为损坏，进而断开运行中容器、
+# 删网重建——把常规启动变成破坏性操作。宿主机 IP 变更等罕见场景需重建时显式执行：
+#   FORCE_NETWORK_RECREATE=true ./install_linux.sh start
 create_network() {
-    print_info "创建统一网络 easyaiot-network..."
-    
-    # 检查网络是否已存在
-    if docker network ls | grep -q easyaiot-network; then
-        print_info "网络 easyaiot-network 已存在"
-        
-        # 检测网络是否可用（尝试创建一个临时容器测试）
-        if ! docker run --rm --network easyaiot-network alpine:latest ping -c 1 8.8.8.8 > /dev/null 2>&1; then
-            print_warning "检测到网络 easyaiot-network 可能存在问题（可能是IP变化导致）"
-            print_info "正在尝试重新创建网络..."
-            
-            # 获取连接到该网络的所有容器
-            local containers=$(docker network inspect easyaiot-network --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null || echo "")
-            
-            if [ -n "$containers" ]; then
-                print_warning "以下容器正在使用该网络，需要先停止："
-                echo "$containers" | tr ' ' '\n' | grep -v '^$' | while read -r container; do
-                    echo "  - $container"
-                done
-                print_info "正在尝试断开这些容器与网络的连接..."
-                
-                # 尝试断开所有容器的网络连接
-                echo "$containers" | tr ' ' '\n' | grep -v '^$' | while read -r container; do
-                    if [ -n "$container" ]; then
-                        print_info "断开容器 $container 与网络的连接..."
-                        docker network disconnect -f easyaiot-network "$container" 2>/dev/null || true
-                    fi
-                done
-                sleep 2
-            fi
-            
-            # 删除旧网络
-            print_info "删除旧网络..."
-            if docker network rm easyaiot-network 2>&1; then
-                print_success "旧网络已删除"
-                sleep 1
-            else
-                local error_msg=$(docker network rm easyaiot-network 2>&1)
-                print_warning "删除旧网络时出现问题: $error_msg"
-                print_info "尝试强制删除..."
-                # 如果普通删除失败，尝试查找并手动断开所有连接
-                local network_id=$(docker network inspect easyaiot-network --format '{{.Id}}' 2>/dev/null || echo "")
-                if [ -n "$network_id" ]; then
-                    # 获取所有连接到该网络的容器ID
-                    local container_ids=$(docker network inspect easyaiot-network --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null || echo "")
-                    if [ -n "$container_ids" ]; then
-                        echo "$container_ids" | tr ' ' '\n' | grep -v '^$' | while read -r container; do
-                            docker network disconnect -f easyaiot-network "$container" 2>/dev/null || true
-                        done
-                        sleep 2
-                        docker network rm easyaiot-network 2>/dev/null || true
-                    fi
-                fi
-            fi
-        else
-            print_info "网络 easyaiot-network 运行正常"
+    print_info "检查统一网络 easyaiot-network..."
+
+    if docker network inspect easyaiot-network > /dev/null 2>&1; then
+        if [ "${FORCE_NETWORK_RECREATE:-false}" != "true" ]; then
+            print_info "网络 easyaiot-network 已存在"
             return 0
         fi
+        print_warning "FORCE_NETWORK_RECREATE=true：断开容器并重建网络..."
+        local containers container
+        containers=$(docker network inspect easyaiot-network --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null || echo "")
+        for container in $containers; do
+            print_info "断开容器 $container 与网络的连接..."
+            docker network disconnect -f easyaiot-network "$container" 2>/dev/null || true
+        done
+        # disconnect 为同步调用，全部断开后即可删除，无需 sleep
+        if ! docker network rm easyaiot-network 2>/dev/null; then
+            print_error "旧网络删除失败，请确认无容器占用后重试: docker network inspect easyaiot-network"
+            return 1
+        fi
+        print_success "旧网络已删除"
     fi
-    
-    # 创建网络（如果不存在或已删除）
+
     print_info "正在创建网络 easyaiot-network..."
-    local create_output=$(docker network create easyaiot-network 2>&1)
-    local create_exit_code=$?
-    
-    if [ $create_exit_code -eq 0 ]; then
+    local create_output
+    if create_output=$(docker network create easyaiot-network 2>&1); then
         print_success "网络 easyaiot-network 已创建"
-        return 0
+    elif echo "$create_output" | grep -qi "already exists"; then
+        print_info "网络 easyaiot-network 已存在（并发创建），继续使用"
+    elif echo "$create_output" | grep -qi "permission denied"; then
+        print_error "没有权限创建 Docker 网络"
+        print_info "请确保当前用户在 docker 组中，或使用 sudo 运行脚本"
+        return 1
     else
-        # 检查错误原因
-        if echo "$create_output" | grep -qi "already exists"; then
-            print_info "网络 easyaiot-network 已存在（可能在检查后创建）"
-            return 0
-        elif echo "$create_output" | grep -qi "permission denied"; then
-            print_error "没有权限创建 Docker 网络"
-            print_info "请确保当前用户在 docker 组中，或使用 sudo 运行脚本"
-            return 1
-        elif echo "$create_output" | grep -qi "network with name.*already exists"; then
-            print_warning "网络名称冲突，尝试使用不同的方法..."
-            # 再次检查网络是否存在
-            if docker network ls | grep -q easyaiot-network; then
-                print_info "网络已存在，继续使用现有网络"
-                return 0
-            else
-                print_error "无法创建网络: $create_output"
-                return 1
-            fi
-        else
-            print_error "无法创建网络 easyaiot-network"
-            print_error "错误信息: $create_output"
-            print_info "诊断建议："
-            print_info "  1. 检查 Docker 服务是否正常运行: sudo systemctl status docker"
-            print_info "  2. 检查当前用户是否有权限: docker network ls"
-            print_info "  3. 查看 Docker 日志: sudo journalctl -u docker.service"
-            return 1
-        fi
+        print_error "无法创建网络 easyaiot-network: $create_output"
+        print_info "诊断建议："
+        print_info "  1. 检查 Docker 服务: sudo systemctl status docker"
+        print_info "  2. 检查权限: docker network ls"
+        print_info "  3. 查看日志: sudo journalctl -u docker.service"
+        return 1
     fi
 }
 
-# 修复脚本文件的换行符（Windows CRLF -> Unix LF）
+# 修复脚本文件的换行符（Windows CRLF -> Unix LF），并确保可执行位
+# 两个动作都遵循「先检测、确需变更才写」：无 \r 不重写文件，已有执行位不再 chmod，
+# 避免每次运行都产生无谓的磁盘写与 mtime/权限抖动。
 fix_line_endings() {
     local script_file="$1"
-    if [ ! -f "$script_file" ]; then
-        return 1
-    fi
-    
-    # 检查文件是否包含 \r 字符（更可靠的方法）
+    [ -f "$script_file" ] || return 1
+
     if grep -q $'\r' "$script_file" 2>/dev/null; then
         print_info "修复 $script_file 的换行符（CRLF -> LF）..."
-        # 使用 sed 去除 \r 字符
-        if sed -i 's/\r$//' "$script_file" 2>/dev/null; then
-            # sed -i 成功
-            :
-        else
-            # 如果 sed -i 失败（某些系统不支持），使用临时文件
-            local temp_file=$(mktemp)
-            if sed 's/\r$//' "$script_file" > "$temp_file" 2>/dev/null; then
+        if ! sed -i 's/\r$//' "$script_file" 2>/dev/null; then
+            # 个别环境 sed -i 不可用：tr 经临时文件兜底
+            # （shell 脚本不存在行中 \r，tr -d '\r' 与 sed 's/\r$//' 语义等价，无需三级回退）
+            local temp_file
+            temp_file=$(mktemp)
+            if tr -d '\r' < "$script_file" > "$temp_file" 2>/dev/null; then
                 mv "$temp_file" "$script_file"
             else
                 rm -f "$temp_file"
-                # 如果 sed 也失败，尝试使用 tr
-                tr -d '\r' < "$script_file" > "$temp_file" 2>/dev/null && mv "$temp_file" "$script_file" || rm -f "$temp_file"
+                print_warning "$script_file 换行符修复失败（sed/tr 均不可用）"
+                return 1
             fi
         fi
-        # 确保文件有执行权限（只给所有者添加，避免需要 root 权限）
-        chmod u+x "$script_file" 2>/dev/null || true
     fi
+
+    # 执行位独立于换行符修复：此前只在发现 CRLF 时才补 +x，LF 但无执行位的脚本会被漏掉。
+    # 子脚本统一经 `bash file` 调用本不依赖执行位，u+x 仅为手动 ./xxx.sh 兜底，粒度最小。
+    [ -x "$script_file" ] || chmod u+x "$script_file" 2>/dev/null || true
 }
 
-# 执行模块命令
+# 模块对应的安装脚本名（基础服务 / AI·VIDEO 麒麟脚本 / 其余标准脚本）
+module_install_script() {
+    case "$1" in
+        ".scripts/docker") echo "install_middleware_linux.sh" ;;
+        "AI"|"VIDEO")      echo "install_linux_kylin.sh" ;;
+        *)                 echo "install_linux.sh" ;;
+    esac
+}
+
+# 执行模块命令（统一流程：定位脚本 -> 修换行符 -> 执行 -> 记录日志）
+# 注：原版在基础模块的【任何】命令后固定 sleep 5（包括 stop/status/logs），
+# 已移除——安装/重启/更新流程改在调用侧用 wait_for_base_services 做精确就绪轮询。
 execute_module_command() {
     local module=$1
     local command=$2
     local module_name=${MODULE_NAMES[$module]}
-    
+    local install_file
+    install_file=$(module_install_script "$module")
+
     if [ ! -d "$PROJECT_ROOT/$module" ]; then
         print_warning "模块 $module 不存在，跳过"
         return 1
     fi
-    
     cd "$PROJECT_ROOT/$module"
-    
-    # 特殊处理.scripts/docker模块（使用install_middleware_linux.sh脚本）
-    if [ "$module" = ".scripts/docker" ]; then
-        # 检查install_middleware_linux.sh文件
-        local install_file="install_middleware_linux.sh"
-        if [ ! -f "$install_file" ]; then
-            print_warning "模块 $module 没有 $install_file 文件，跳过"
-            return 1
-        fi
-        
-        # 修复换行符
-        fix_line_endings "$install_file"
-        
-        print_info "执行 $module_name: $command"
-        
-        if bash "$install_file" "$command" 2>&1 | tee -a "$LOG_FILE"; then
-            print_success "$module_name: $command 执行成功"
-            print_info "等待 5 秒以确保数据库服务完全启动..."
-            sleep 5
-            return 0
-        else
-            print_error "$module_name: $command 执行失败"
-            return 1
-        fi
-    # 特殊处理DEVICE模块（使用install_linux.sh脚本）
-    elif [ "$module" = "DEVICE" ]; then
-        # 检查install_linux.sh文件
-        if [ ! -f "install_linux.sh" ]; then
-            print_warning "模块 $module 没有 install_linux.sh 脚本，跳过"
-            return 1
-        fi
-        
-        # 修复换行符
-        fix_line_endings "install_linux.sh"
-        
-        print_info "执行 $module_name: $command"
-        
-        if bash install_linux.sh "$command" 2>&1 | tee -a "$LOG_FILE"; then
-            print_success "$module_name: $command 执行成功"
-            return 0
-        else
-            print_error "$module_name: $command 执行失败"
-            return 1
-        fi
-    # 特殊处理AI和VIDEO模块（使用install_linux_kylin.sh脚本）
-    elif [ "$module" = "AI" ] || [ "$module" = "VIDEO" ]; then
-        # 检查install_linux_kylin.sh文件
-        if [ ! -f "install_linux_kylin.sh" ]; then
-            print_warning "模块 $module 没有 install_linux_kylin.sh 脚本，跳过"
-            return 1
-        fi
-        
-        # 修复换行符
-        fix_line_endings "install_linux_kylin.sh"
-        
-        print_info "执行 $module_name: $command (麒麟系统)"
-        
-        if bash install_linux_kylin.sh "$command" 2>&1 | tee -a "$LOG_FILE"; then
-            print_success "$module_name: $command 执行成功"
-            return 0
-        else
-            print_error "$module_name: $command 执行失败"
-            return 1
-        fi
+
+    if [ ! -f "$install_file" ]; then
+        print_warning "模块 $module 没有 $install_file 文件，跳过"
+        return 1
+    fi
+
+    fix_line_endings "$install_file"
+    case "$module" in
+        AI|VIDEO) print_info "执行 $module_name: $command (麒麟系统)" ;;
+        *)        print_info "执行 $module_name: $command" ;;
+    esac
+
+    local defer_agent_sync=0
+    case "$module" in
+        DEVICE|AI|VIDEO|WEB) defer_agent_sync=1 ;;
+    esac
+    if [ "$defer_agent_sync" -eq 1 ]; then
+        export EASYAIOT_DEFER_PLATFORM_AGENT_SYNC=1
+    fi
+
+    ensure_deploy_profile
+    export EASYAIOT_DEPLOY_PROFILE
+    export EASYAIOT_SKIP_PROFILE_PROMPT
+
+    # ⚠️ 失败判定必须取 PIPESTATUS[0]（子脚本退出码）：
+    # 脚本未开 pipefail（全局开会让 `docker ps | grep -q` 类管道误报），
+    # `if 子脚本 | tee` 取到的是 tee 的退出码（恒 0），曾导致所有模块失败都被报成"成功"。
+    # 不加 || true：本函数所有调用点均处于 if/|| 守卫上下文，set -e 不会触发；
+    # 若 tee 写盘失败（磁盘满），加 || true 反而会把 PIPESTATUS 冲成 0、掩盖模块失败。
+    local rc
+    bash "$install_file" "$command" 2>&1 | tee -a "$LOG_FILE"
+    rc=${PIPESTATUS[0]}
+
+    if [ "$defer_agent_sync" -eq 1 ]; then
+        unset EASYAIOT_DEFER_PLATFORM_AGENT_SYNC
+    fi
+
+    if [ "$rc" -eq 0 ]; then
+        print_success "$module_name: $command 执行成功"
+        return 0
     else
-        # 其他模块使用install_linux.sh脚本
-        if [ ! -f "install_linux.sh" ]; then
-            print_warning "模块 $module 没有 install_linux.sh 脚本，跳过"
-            return 1
-        fi
-        
-        # 修复换行符
-        fix_line_endings "install_linux.sh"
-        
-        print_info "执行 $module_name: $command"
-        
-        if bash install_linux.sh "$command" 2>&1 | tee -a "$LOG_FILE"; then
-            print_success "$module_name: $command 执行成功"
-            return 0
-        else
-            print_error "$module_name: $command 执行失败"
-            return 1
-        fi
+        print_error "$module_name: $command 执行失败 (exit $rc)"
+        return 1
     fi
 }
 
@@ -770,9 +732,11 @@ verify_service_health() {
 install_linux() {
     print_section "开始安装所有服务 (麒麟系统)"
     
+    select_deploy_profile_for_install
     detect_architecture
     check_docker "$@"
     check_docker_compose
+    prepare_runtime_environment
     configure_docker_mirror
     create_network
     
@@ -783,6 +747,10 @@ install_linux() {
         print_section "安装 ${MODULE_NAMES[$module]}"
         if execute_module_command "$module" "install"; then
             success_count=$((success_count + 1))
+            # 基础服务装完后精确等待 PostgreSQL/Nacos/Redis 就绪（取代原固定 sleep 5）
+            if [ "$module" = ".scripts/docker" ]; then
+                wait_for_base_services
+            fi
         else
             print_error "${MODULE_NAMES[$module]} 安装失败"
         fi
@@ -794,100 +762,132 @@ install_linux() {
     
     if [ $success_count -eq $total_count ]; then
         print_success "所有模块安装成功！"
+        ensure_platform_agent_after_stack
     else
         print_warning "部分模块安装失败，请检查日志"
         exit 1
     fi
 }
 
-# 等待基础服务就绪
+# 通用容器就绪等待：wait_for_container_ready <显示名> <最大次数> <间隔秒> <检测命令...>
+# 检测命令退出码 0 即就绪；短间隔精确轮询，就绪即刻返回（无固定长 sleep）
+wait_for_container_ready() {
+    local name=$1 max_attempts=$2 interval=$3
+    shift 3
+    local attempt=0
+    print_info "等待 ${name} 服务就绪..."
+    while [ $attempt -lt $max_attempts ]; do
+        if "$@" > /dev/null 2>&1; then
+            print_success "${name} 服务已就绪"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep "$interval"
+    done
+    print_warning "${name} 服务未在预期时间内就绪，继续执行..."
+    return 1
+}
+
+# 仅当容器在运行时才等待（容器未启动直接跳过）
+container_running() {
+    docker ps --filter "name=$1" --format "{{.Names}}" | grep -q "$1"
+}
+
+# 等待基础服务就绪（PostgreSQL / Nacos / Redis）
 wait_for_base_services() {
     print_info "等待基础服务就绪..."
-    
-    # 等待 PostgreSQL
-    if docker ps --filter "name=postgres-server" --format "{{.Names}}" | grep -q "postgres-server"; then
-        print_info "等待 PostgreSQL 服务就绪..."
-        local max_attempts=60
-        local attempt=0
-        while [ $attempt -lt $max_attempts ]; do
-            if docker exec postgres-server pg_isready -U postgres > /dev/null 2>&1; then
-                print_success "PostgreSQL 服务已就绪"
-                break
-            fi
-            attempt=$((attempt + 1))
-            sleep 2
-        done
-        if [ $attempt -ge $max_attempts ]; then
-            print_warning "PostgreSQL 服务未在预期时间内就绪，继续执行..."
-        fi
+    if container_running postgres-server; then
+        wait_for_container_ready "PostgreSQL" 60 2 docker exec postgres-server pg_isready -U postgres || true
     fi
-    
-    # 等待 Nacos
-    if docker ps --filter "name=nacos-server" --format "{{.Names}}" | grep -q "nacos-server"; then
-        print_info "等待 Nacos 服务就绪..."
-        local max_attempts=60
-        local attempt=0
-        while [ $attempt -lt $max_attempts ]; do
-            if curl -s --connect-timeout 2 "http://localhost:8848/nacos/actuator/health" > /dev/null 2>&1; then
-                print_success "Nacos 服务已就绪"
-                break
-            fi
-            attempt=$((attempt + 1))
-            sleep 2
-        done
-        if [ $attempt -ge $max_attempts ]; then
-            print_warning "Nacos 服务未在预期时间内就绪，继续执行..."
-        fi
+    if container_running nacos-server; then
+        wait_for_container_ready "Nacos" 60 2 curl -s --connect-timeout 2 "http://localhost:8848/nacos/actuator/health" || true
     fi
-    
-    # 等待 Redis
-    if docker ps --filter "name=redis-server" --format "{{.Names}}" | grep -q "redis-server"; then
-        print_info "等待 Redis 服务就绪..."
-        local max_attempts=30
-        local attempt=0
-        while [ $attempt -lt $max_attempts ]; do
-            if docker exec redis-server redis-cli ping > /dev/null 2>&1; then
-                print_success "Redis 服务已就绪"
-                break
-            fi
-            attempt=$((attempt + 1))
-            sleep 1
-        done
-        if [ $attempt -ge $max_attempts ]; then
-            print_warning "Redis 服务未在预期时间内就绪，继续执行..."
-        fi
+    if container_running redis-server; then
+        wait_for_container_ready "Redis" 30 1 docker exec redis-server redis-cli ping || true
     fi
+}
+
+# 业务模块清单（MODULES 去掉基础服务），结果写入全局数组 BIZ_MODULES
+collect_biz_modules() {
+    BIZ_MODULES=()
+    local module
+    for module in "${MODULES[@]}"; do
+        [ "$module" = ".scripts/docker" ] || BIZ_MODULES+=("$module")
+    done
+}
+
+# 并行执行一批模块命令：run_modules_parallel <command> <module...>
+# 各模块在子 shell 中执行、输出写入独立日志（避免终端交叉错行），
+# 全部结束后按模块顺序回放结果，失败的展示日志尾部。返回失败模块数。
+run_modules_parallel() {
+    local command=$1; shift
+    local pids=() logs=() mods=()
+    local module
+    for module in "$@"; do
+        local mlog="${LOG_DIR}/${command}_$(echo "$module" | tr '/' '_')_$$.log"
+        : > "$mlog"  # 截断可能残留的同名旧文件（$$ 复用场景），避免 tee -a 回放陈旧内容
+        ( LOG_FILE="$mlog"; execute_module_command "$module" "$command" > /dev/null 2>&1 ) &
+        pids+=($!); logs+=("$mlog"); mods+=("$module")
+    done
+    # Ctrl-C/终止时清理临时日志，避免 logs/ 目录残留
+    trap 'rm -f "${logs[@]}" 2>/dev/null' INT TERM
+
+    local i fail=0
+    for i in "${!pids[@]}"; do
+        if wait "${pids[$i]}"; then
+            print_success "${MODULE_NAMES[${mods[$i]}]}: $command 完成"
+        else
+            fail=$((fail + 1))
+            print_error "${MODULE_NAMES[${mods[$i]}]}: $command 失败，日志尾部："
+            tail -n 40 "${logs[$i]}" 2>/dev/null || true
+        fi
+        # 回放进主日志后清理临时文件
+        cat "${logs[$i]}" >> "$LOG_FILE" 2>/dev/null || true
+        rm -f "${logs[$i]}"
+    done
+    trap - INT TERM
+    return $fail
 }
 
 # 启动所有服务
 start_all() {
     print_section "启动所有服务 (麒麟系统)"
     
+    ensure_deploy_profile
+    print_info "部署形态: $(_deploy_profile_desc) (EASYAIOT_DEPLOY_PROFILE=${EASYAIOT_DEPLOY_PROFILE})"
     detect_architecture
     check_docker "$@"
     check_docker_compose
+    prepare_runtime_environment
     create_network
     
     # 先启动基础服务（.scripts/docker）
     print_section "启动基础服务"
-    execute_module_command ".scripts/docker" "start"
+    if ! execute_module_command ".scripts/docker" "start"; then
+        print_error "基础服务启动失败，中止后续模块启动"
+        return 1
+    fi
     echo ""
-    
+
     # 等待基础服务就绪
     wait_for_base_services
     echo ""
-    
-    # 再启动其他服务
-    for module in "${MODULES[@]}"; do
-        # 跳过基础服务（已经启动）
-        if [ "$module" = ".scripts/docker" ]; then
-            continue
-        fi
-        execute_module_command "$module" "start"
-        echo ""
-    done
+
+    # 再启动其他服务。DEVICE/AI/VIDEO/WEB 启动期互不依赖（各自只连基础服务），
+    # 默认并行启动（仅 compose up，无构建负载）；PARALLEL_MODULES=false 可回退串行。
+    collect_biz_modules
+    if [ "${PARALLEL_MODULES:-true}" = "true" ]; then
+        print_info "并行启动业务模块: ${BIZ_MODULES[*]}（PARALLEL_MODULES=false 可回退串行）"
+        run_modules_parallel "start" "${BIZ_MODULES[@]}" || print_warning "部分模块启动失败，详见上方日志"
+    else
+        for module in "${BIZ_MODULES[@]}"; do
+            execute_module_command "$module" "start" || print_warning "${MODULE_NAMES[$module]} 启动失败，继续其余模块"
+            echo ""
+        done
+    fi
     
     print_success "所有服务启动完成"
+    ensure_platform_agent_after_stack
 }
 
 # 停止所有服务
@@ -897,12 +897,12 @@ stop_all() {
     check_docker "$@"
     check_docker_compose
     
-    # 逆序停止
+    # 逆序停止（尽力而为：单个失败不阻断其余模块停止）
     for ((idx=${#MODULES[@]}-1 ; idx>=0 ; idx--)); do
-        execute_module_command "${MODULES[idx]}" "stop"
+        execute_module_command "${MODULES[idx]}" "stop" || print_warning "${MODULE_NAMES[${MODULES[idx]}]} 停止失败，继续其余模块"
         echo ""
     done
-    
+
     print_success "所有服务已停止"
 }
 
@@ -910,17 +910,28 @@ stop_all() {
 restart_all() {
     print_section "重启所有服务 (麒麟系统)"
     
+    ensure_deploy_profile
+    print_info "部署形态: $(_deploy_profile_desc) (EASYAIOT_DEPLOY_PROFILE=${EASYAIOT_DEPLOY_PROFILE})"
     detect_architecture
     check_docker "$@"
     check_docker_compose
+    prepare_runtime_environment
     create_network
     
     for module in "${MODULES[@]}"; do
-        execute_module_command "$module" "restart"
+        if execute_module_command "$module" "restart"; then
+            # 基础服务重启后精确等待就绪，再重启依赖它的业务模块（取代原固定 sleep 5）
+            if [ "$module" = ".scripts/docker" ]; then
+                wait_for_base_services
+            fi
+        else
+            print_warning "${MODULE_NAMES[$module]} 重启失败，继续其余模块"
+        fi
         echo ""
     done
-    
+
     print_success "所有服务重启完成"
+    ensure_platform_agent_after_stack
 }
 
 # 查看所有服务状态
@@ -932,51 +943,69 @@ status_all() {
     
     for module in "${MODULES[@]}"; do
         print_section "${MODULE_NAMES[$module]} 状态"
-        execute_module_command "$module" "status"
+        execute_module_command "$module" "status" || true
         echo ""
     done
 }
 
 # 查看日志
+# 参数改名 target_module：原版 local module 与下方 for module 循环变量同名，
+# 循环会覆盖参数值（遮蔽），靠"恰好不再使用"才没出错，易引入回归。
 view_logs() {
-    local module=${1:-""}
-    
-    if [ -z "$module" ]; then
+    local target_module=${1:-""}
+
+    check_docker
+    check_docker_compose
+
+    if [ -z "$target_module" ]; then
         print_info "查看所有服务日志..."
-        check_docker "$@"
-        check_docker_compose
-        
+        local module
         for module in "${MODULES[@]}"; do
             print_section "${MODULE_NAMES[$module]} 日志"
-            execute_module_command "$module" "logs"
+            execute_module_command "$module" "logs" || true
             echo ""
         done
     else
-        print_info "查看 $module 服务日志..."
-        execute_module_command "$module" "logs"
+        print_info "查看 $target_module 服务日志..."
+        execute_module_command "$target_module" "logs" || true
     fi
 }
 
 # 构建所有镜像
+# 各模块构建互不依赖，PARALLEL_BUILD=true 时并行执行：
+#   - 每个模块在子 shell 中构建，输出写入独立日志（避免终端交叉错行）
+#   - 全部结束后按模块顺序回放结果，失败的展示日志尾部
+# 默认串行：Java/Node/Python 构建内存峰值高，小内存服务器并行易 OOM，由使用者显式选择。
 build_all() {
     print_section "构建所有镜像 (麒麟系统)"
-    
+
     detect_architecture
     check_docker "$@"
     check_docker_compose
-    
-    for module in "${MODULES[@]}"; do
-        execute_module_command "$module" "build"
-        echo ""
-    done
-    
+
+    if [ "${PARALLEL_BUILD:-false}" = "true" ]; then
+        print_info "并行构建模式（PARALLEL_BUILD=true），各模块日志将在结束后汇总展示"
+        if ! run_modules_parallel "build" "${MODULES[@]}"; then
+            print_error "部分模块构建失败，请检查日志: $LOG_FILE"
+            exit 1
+        fi
+    else
+        local module
+        for module in "${MODULES[@]}"; do
+            execute_module_command "$module" "build" || print_warning "${MODULE_NAMES[$module]} 构建失败，继续其余模块"
+            echo ""
+        done
+    fi
+
     print_success "所有镜像构建完成"
 }
+
 
 # 清理所有服务
 clean_all() {
     print_warning "这将删除所有容器、镜像和数据卷，确定要继续吗？(y/N)"
-    read -r response
+    # 非交互 stdin(EOF) 下 read 返回非 0，set -e 会无声退出——兜底为空(等同取消)
+    read -r response || response=""
     
     if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
         print_section "清理所有服务"
@@ -984,9 +1013,9 @@ clean_all() {
         check_docker "$@"
         check_docker_compose
         
-        # 逆序清理
+        # 逆序清理（尽力而为：单个失败不阻断其余模块清理）
         for ((idx=${#MODULES[@]}-1 ; idx>=0 ; idx--)); do
-            execute_module_command "${MODULES[idx]}" "clean"
+            execute_module_command "${MODULES[idx]}" "clean" || print_warning "${MODULE_NAMES[${MODULES[idx]}]} 清理失败，继续其余模块"
             echo ""
         done
         
@@ -1004,17 +1033,37 @@ clean_all() {
 update_all() {
     print_section "更新所有服务 (麒麟系统)"
     
+    ensure_deploy_profile
+    print_info "部署形态: $(_deploy_profile_desc) (EASYAIOT_DEPLOY_PROFILE=${EASYAIOT_DEPLOY_PROFILE})"
     detect_architecture
     check_docker "$@"
     check_docker_compose
+    prepare_runtime_environment
     create_network
     
-    for module in "${MODULES[@]}"; do
-        execute_module_command "$module" "update"
-        echo ""
-    done
-    
+    # 基础服务先更新并等就绪，业务模块随后
+    if execute_module_command ".scripts/docker" "update"; then
+        wait_for_base_services
+    else
+        print_warning "${MODULE_NAMES[".scripts/docker"]} 更新失败，继续其余模块"
+    fi
+    echo ""
+
+    # 业务模块更新：update 可能包含重建镜像（构建内存峰值高），默认串行；
+    # 机器内存充裕时可 PARALLEL_MODULES=true 并行提速
+    collect_biz_modules
+    if [ "${PARALLEL_MODULES:-false}" = "true" ]; then
+        print_info "并行更新业务模块: ${BIZ_MODULES[*]}"
+        run_modules_parallel "update" "${BIZ_MODULES[@]}" || print_warning "部分模块更新失败，详见上方日志"
+    else
+        for module in "${BIZ_MODULES[@]}"; do
+            execute_module_command "$module" "update" || print_warning "${MODULE_NAMES[$module]} 更新失败，继续其余模块"
+            echo ""
+        done
+    fi
+
     print_success "所有服务更新完成"
+    ensure_platform_agent_after_stack
 }
 
 # 验证所有服务
@@ -1069,7 +1118,6 @@ check_environment() {
     
     detect_architecture
     echo ""
-    
     print_info "=== 检查 Docker ==="
     if check_command docker; then
         local docker_version=$(docker --version 2>/dev/null || echo "未知版本")
@@ -1107,28 +1155,14 @@ check_environment() {
     
     echo ""
     print_info "=== 检查 Docker Compose ==="
-    local compose_found=false
-    
-    # 检查 docker-compose (v1)
-    if check_command docker-compose; then
-        local version_output=$(docker-compose --version 2>/dev/null || echo "")
-        if [ -n "$version_output" ]; then
-            print_success "Docker Compose v1 已安装: $version_output"
-            compose_found=true
+    if detect_compose; then
+        if [ -n "$COMPOSE_V1_VERSION" ]; then
+            print_success "Docker Compose v1 已安装: $COMPOSE_V1_VERSION"
         fi
-    fi
-    
-    # 检查 docker compose (v2)
-    if docker compose version &> /dev/null 2>&1; then
-        local version_output=$(docker compose version --short 2>/dev/null || echo "")
-        if [ -z "$version_output" ]; then
-            version_output=$(docker compose version 2>&1 | grep -E "version|Docker Compose" | head -1 | sed 's/^[[:space:]]*//' || echo "可用")
+        if [ -n "$COMPOSE_V2_VERSION" ]; then
+            print_success "Docker Compose v2 已安装: $COMPOSE_V2_VERSION"
         fi
-        print_success "Docker Compose v2 已安装: $version_output"
-        compose_found=true
-    fi
-    
-    if [ "$compose_found" = false ]; then
+    else
         print_error "Docker Compose 未安装"
     fi
     
@@ -1136,12 +1170,9 @@ check_environment() {
     print_info "=== 系统信息 ==="
     print_info "操作系统: $(uname -s) $(uname -r)"
     print_info "架构: $(uname -m) (ARM)"
-    
-    # 检测麒麟系统
     if [ -f /etc/kylin-release ] || [ -f /etc/neokylin-release ] || grep -qi "kylin" /etc/os-release 2>/dev/null; then
         print_info "系统类型: 麒麟系统"
     fi
-    
     print_info "用户: $(whoami)"
     
     echo ""
@@ -1168,6 +1199,7 @@ show_help() {
     echo "  update          - 更新并重启所有服务"
     echo "  verify          - 验证所有服务是否启动成功"
     echo "  check           - 检查 Docker 和 Docker Compose 安装状态"
+    echo "  profile         - 显示当前部署形态与服务范围"
     echo "  help            - 显示此帮助信息"
     echo ""
     echo "模块列表:"
@@ -1180,6 +1212,13 @@ show_help() {
     echo "  - AI 和 VIDEO 模块将使用 install_linux_kylin.sh 脚本"
     echo "  - 其他模块使用标准 install_linux.sh 脚本"
     echo "  - 如需在 x86_64 架构上部署，请使用 install_linux.sh"
+    echo ""
+    echo "可选环境变量:"
+    echo "  EASYAIOT_DEPLOY_PROFILE      - 部署形态: mini(1) | standard(2) | full(3，默认 full)"
+    echo "  PARALLEL_MODULES=true|false  - 业务模块并行开关：start 默认并行；update 默认串行(可能含重建镜像)"
+    echo "  PARALLEL_BUILD=true          - build 时并行构建各模块（默认串行，防小内存并行 OOM）"
+    echo "  FORCE_NETWORK_RECREATE=true  - 启动时强制重建 easyaiot-network（宿主机 IP 变更后使用）"
+    echo "  HOST_IP=<ip>                 - 跳过自动探测，强制指定宿主机 IP"
     echo ""
 }
 
@@ -1219,6 +1258,10 @@ main() {
             ;;
         check)
             check_environment
+            ;;
+        profile)
+            ensure_deploy_profile
+            print_deploy_profile_summary
             ;;
         help|--help|-h)
             show_help
